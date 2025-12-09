@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Honeypot Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <h2>APS HONEYPOT</h2>
+                <div class="status-indicator online">Server Online</div>
+            </div>
+
+            <nav class="nav-menu">
+                <button class="nav-item active" onclick="showSection('dashboard')">Dashboard</button>
+                <button class="nav-item" onclick="showSection('agents')">Agents</button>
+                <button class="nav-item" onclick="showSection('logs')">Live Logs</button>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+
+            <!-- Dashboard Section -->
+            <section id="dashboard" class="content-section">
+                <header class="page-header">
+                    <h1>Dashboard Overview</h1>
+                    <button class="btn btn-primary" onclick="refreshData()">Refresh</button>
+                </header>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Active Agents</h3>
+                        <div class="stat-value" id="active-agents-count">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Total Logs</h3>
+                        <div class="stat-value" id="total-logs-count">--</div>
+                    </div>
+                </div>
+
+                <div class="recent-activity">
+                    <h3>Recent Alerts</h3>
+                    <div class="log-table-container">
+                        <table class="log-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Node</th>
+                                    <th>Protocol</th>
+                                    <th>Source IP</th>
+                                    <th>Activity</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dashboard-logs-body">
+                                <!-- Populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Agents Section -->
+            <section id="agents" class="content-section hidden">
+                <header class="page-header">
+                    <h1>Agent Management</h1>
+                    <button class="btn btn-primary" onclick="showAddAgentModal()">+ Add Agent</button>
+                </header>
+
+                <div class="agents-grid" id="agents-grid">
+                    <!-- Agent Cards Populated by JS -->
+                </div>
+            </section>
+
+            <!-- Logs Section -->
+            <section id="logs" class="content-section hidden">
+                <header class="page-header">
+                    <h1>Live Logs</h1>
+                </header>
+                <div class="log-console" id="log-console">
+                    <!-- Text based logs -->
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="add-agent-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeAddAgentModal()">&times;</span>
+            <h2>Add New Agent</h2>
+            <div class="form-group">
+                <label>Node ID</label>
+                <input type="text" id="new-agent-id" placeholder="e.g. node_02">
+            </div>
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="new-agent-name" placeholder="e.g. Factory Line B">
+            </div>
+            <div class="form-group">
+                <label>Default IP (Optional)</label>
+                <input type="text" id="new-agent-ip" placeholder="0.0.0.0">
+            </div>
+            <div class="form-group">
+                <label>Initial Configuration (JSON)</label>
+                <textarea id="new-agent-config" rows="10" placeholder='{"plcs": [...]}'></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeAddAgentModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveNewAgent()">Add Agent</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent Config Modal -->
+    <div id="config-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal()">&times;</span>
+            <h2>Edit Configuration</h2>
+            <div class="form-group">
+                <label>Node ID</label>
+                <input type="text" id="config-node-id" readonly>
+            </div>
+            <div class="form-group">
+                <label>Configuration (JSON)</label>
+                <textarea id="config-json" rows="15"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/script.js?v=2"></script>
+</body>
+
+</html>

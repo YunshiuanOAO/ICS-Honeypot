@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.15
+    container_name: honeypot-es
+    environment:
+      - node.name=honeypot-es
+      - cluster.name=honeypot-docker-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - honeypot-net
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.15
+    container_name: honeypot-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - honeypot-net
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:7.17.15
+    container_name: honeypot-filebeat
+    user: root
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      # Mount the logs directory from the server (relative to this docker-compose file)
+      - ../logs:/var/log/honeypot:ro
+      # Persist registry to avoid duplicate ingestion on restart
+      - filebeat_data:/usr/share/filebeat/data
+    command: filebeat -e -strict.perms=false
+    depends_on:
+      - elasticsearch
+    networks:
+      - honeypot-net
+
+volumes:
+  es_data:
+  filebeat_data:
+
+networks:
+  honeypot-net:
+    driver: bridge

@@ -1,0 +1,7 @@
+requests
+pymodbus
+python-snap7
+fastapi
+uvicorn
+python-multipart
+jinja2
