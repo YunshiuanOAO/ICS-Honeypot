@@ -5,6 +5,7 @@
 import time
 import math
 import random
+import struct
 
 
 class SimulationEngine:
@@ -49,7 +50,7 @@ class SimulationEngine:
         normalized = (math.sin(2 * math.pi * elapsed / period_seconds) + 1) / 2
         # 映射到目標範圍
         value = min_val + normalized * (max_val - min_val)
-        return int(value)
+        return value
     
     def sawtooth_wave(self, min_val: int, max_val: int, period_seconds: int) -> int:
         """
@@ -72,7 +73,7 @@ class SimulationEngine:
         position = (elapsed % period_seconds) / period_seconds
         # 線性映射到目標範圍
         value = min_val + position * (max_val - min_val)
-        return int(value)
+        return value
     
     def triangle_wave(self, min_val: int, max_val: int, period_seconds: int) -> int:
         """
@@ -94,7 +95,7 @@ class SimulationEngine:
         else:
             normalized = 2 - position * 2
         value = min_val + normalized * (max_val - min_val)
-        return int(value)
+        return value
     
     def square_wave(self, on_seconds: int, off_seconds: int) -> bool:
         """
@@ -133,7 +134,12 @@ class SimulationEngine:
             # 流量約 500，±5 波動，範圍 450-550
             flow = engine.random_walk(flow, 450, 550, 5)
         """
-        step = random.randint(-max_step, max_step)
+
+        if isinstance(max_step, float) or isinstance(current_value, float):
+            step = random.uniform(-max_step, max_step)
+        else:
+            step = random.randint(-max_step, max_step)
+            
         new_value = current_value + step
         # 確保在邊界內
         new_value = max(min_val, min(max_val, new_value))
@@ -190,7 +196,7 @@ class SimulationEngine:
         
         decay = math.exp(-elapsed / time_constant)
         value = target_val + (initial_val - target_val) * decay
-        return int(value)
+        return value
     
     def step_sequence(self, values: list, durations: list) -> int:
         """
@@ -223,22 +229,22 @@ class SimulationEngine:
 
 
 # ============================================
-# 場景載入器 (從 JSON 檔案載入場景配置)
+# 配置載入器 (從 JSON 檔案載入配置)
 # ============================================
 
 import sys
 import os
-# 將 scenarios 目錄加入 Python 路徑
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'scenarios'))
+# 將 profiles 目錄加入 Python 路徑
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'profiles'))
 
 try:
-    from scenario_loader import get_modbus_scenario, get_s7_scenario, get_scenario_loader
-    SCENARIOS_AVAILABLE = True
+    from profile_loader import get_modbus_profile, get_s7_profile, get_profile_loader
+    PROFILES_AVAILABLE = True
 except ImportError:
-    print("[Simulation] Warning: scenario_loader not found. Scenario support disabled.")
-    SCENARIOS_AVAILABLE = False
-    get_modbus_scenario = None
-    get_s7_scenario = None
+    print("[Simulation] Warning: profile_loader not found. Profile support disabled.")
+    PROFILES_AVAILABLE = False
+    get_modbus_profile = None
+    get_s7_profile = None
 
 
 
@@ -249,11 +255,11 @@ class ConfigDrivenSimulator:
     根據配置動態生成模擬數據
     
     支援三種配置模式：
-    1. 最簡配置（使用預設場景）：
-       {"scenario": "water_treatment"}
+    1. 最簡配置（使用預設配置）：
+       {"profile": "water_treatment"}
        
-    2. 部分覆蓋（基於場景 + 自定義）：
-       {"scenario": "water_treatment", "holding_registers": [...]}
+    2. 部分覆蓋（基於配置 + 自定義）：
+       {"profile": "water_treatment", "holding_registers": [...]}
        
     3. 完整自定義：
        {"holding_registers": [...], "coils": [...], ...}
@@ -269,8 +275,8 @@ class ConfigDrivenSimulator:
     - "counter": 計數器 (可選 max)
     """
     
-    # 場景載入器（從 JSON 檔案載入）
-    _scenario_loader = None
+    # 配置載入器（從 JSON 檔案載入）
+    _profile_loader = None
     
     def __init__(self, config: dict = None):
         """
@@ -278,9 +284,9 @@ class ConfigDrivenSimulator:
         
         Args:
             config: 模擬配置字典，可以是：
-                - None 或 {}: 使用預設水處理廠場景
-                - {"scenario": "xxx"}: 使用指定預設場景
-                - {"scenario": "xxx", "holding_registers": [...]}: 場景 + 自定義覆蓋
+                - None 或 {}: 使用預設水處理廠配置
+                - {"profile": "xxx"}: 使用指定預設配置
+                - {"profile": "xxx", "holding_registers": [...]}: 配置 + 自定義覆蓋
                 - {"holding_registers": [...], ...}: 完整自定義
         """
         self.engine = SimulationEngine()
@@ -298,34 +304,34 @@ class ConfigDrivenSimulator:
     
     def _load_config(self):
         """載入並解析模擬配置"""
-        scenario_name = self.config.get("scenario")
+        profile_name = self.config.get("profile")
         
-        # 1. 載入基礎場景（如果指定）
+        # 1. 載入基礎配置（如果指定）
         base_registers = {}
         base_coils = {}
         base_input_regs = {}
         base_discrete = {}
         
-        # 使用場景載入器（從 JSON 檔案）
-        if scenario_name and SCENARIOS_AVAILABLE:
-            modbus_scenario = get_modbus_scenario(scenario_name)
-            if modbus_scenario:
+        # 使用配置載入器（從 JSON 檔案）
+        if profile_name and PROFILES_AVAILABLE:
+            modbus_profile = get_modbus_profile(profile_name)
+            if modbus_profile:
                 # JSON 格式已經是 list of dicts，直接轉為 dict by addr
-                base_registers = {item["addr"]: item for item in modbus_scenario.get("registers", [])}
-                base_coils = {item["addr"]: item for item in modbus_scenario.get("coils", [])}
-                base_input_regs = {item["addr"]: item for item in modbus_scenario.get("input_registers", [])}
-                base_discrete = {item["addr"]: item for item in modbus_scenario.get("discrete_inputs", [])}
-                print(f"[Simulator] Loaded scenario from JSON: {scenario_name}")
+                base_registers = {item["addr"]: item for item in modbus_profile.get("registers", [])}
+                base_coils = {item["addr"]: item for item in modbus_profile.get("coils", [])}
+                base_input_regs = {item["addr"]: item for item in modbus_profile.get("input_registers", [])}
+                base_discrete = {item["addr"]: item for item in modbus_profile.get("discrete_inputs", [])}
+                print(f"[Simulator] Loaded profile from JSON: {profile_name}")
             else:
-                print(f"[Simulator] Warning: Scenario '{scenario_name}' not found, using custom config only")
-        elif not self.config.get("holding_registers") and not self.config.get("coils") and SCENARIOS_AVAILABLE:
-            # 沒有指定場景也沒有自定義配置，使用預設水處理廠
-            modbus_scenario = get_modbus_scenario("water_treatment")
-            if modbus_scenario:
-                base_registers = {item["addr"]: item for item in modbus_scenario.get("registers", [])}
-                base_coils = {item["addr"]: item for item in modbus_scenario.get("coils", [])}
-                base_input_regs = {item["addr"]: item for item in modbus_scenario.get("input_registers", [])}
-                base_discrete = {item["addr"]: item for item in modbus_scenario.get("discrete_inputs", [])}
+                print(f"[Simulator] Warning: Profile '{profile_name}' not found, using custom config only")
+        elif not self.config.get("holding_registers") and not self.config.get("coils") and PROFILES_AVAILABLE:
+            # 沒有指定配置也沒有自定義配置，使用預設水處理廠
+            modbus_profile = get_modbus_profile("water_treatment")
+            if modbus_profile:
+                base_registers = {item["addr"]: item for item in modbus_profile.get("registers", [])}
+                base_coils = {item["addr"]: item for item in modbus_profile.get("coils", [])}
+                base_input_regs = {item["addr"]: item for item in modbus_profile.get("input_registers", [])}
+                base_discrete = {item["addr"]: item for item in modbus_profile.get("discrete_inputs", [])}
                 print("[Simulator] No config provided, using default: water_treatment (from JSON)")
         
         # 2. 應用自定義覆蓋
@@ -350,11 +356,11 @@ class ConfigDrivenSimulator:
               f"{len(self.coils)} coils, {len(self.input_registers)} input registers, "
               f"{len(self.discrete_inputs)} discrete inputs")
     
-    def _convert_scenario_registers(self, registers: dict) -> dict:
-        """將場景格式轉換為配置格式"""
+    def _convert_profile_registers(self, registers: dict) -> dict:
+        """將配置格式轉換為模擬器格式"""
         result = {}
         for addr, cfg in registers.items():
-            item = {"addr": addr, "name": cfg.get("name", f"reg_{addr}")}
+            item = {"addr": addr}
             if "value" in cfg:
                 item["wave"] = "fixed"
                 item["value"] = cfg["value"]
@@ -370,14 +376,14 @@ class ConfigDrivenSimulator:
             result[addr] = item
         return result
     
-    def _convert_scenario_coils(self, coils: dict) -> dict:
-        """將場景格式轉換為配置格式"""
+    def _convert_profile_coils(self, coils: dict) -> dict:
+        """將配置格式轉換為模擬器格式"""
         result = {}
         for addr, cfg in coils.items():
             on_time = cfg.get("on", 0)
             off_time = cfg.get("off", 0)
             
-            item = {"addr": addr, "name": cfg.get("name", f"coil_{addr}")}
+            item = {"addr": addr}
             
             if on_time > 0 and off_time == 0:
                 # 永遠 ON
@@ -406,6 +412,13 @@ class ConfigDrivenSimulator:
         
         if wave == "fixed":
             return cfg.get("value", 0)
+        
+        elif wave == "static":
+            # 靜態值，不自動更新 (用於讓攻擊者寫入或保持狀態)
+            # 如果是第一次初始化，返回 min_val (預設值)
+            # 如果已經有值，則應該由 update_storage 保留原值 (這裡只負責生成新值)
+            # 但 _generate_value 是無狀態的，所以我們回傳 None 表示 "不更新"
+            return None
         
         elif wave == "sine":
             return self.engine.sine_wave(
@@ -459,6 +472,9 @@ class ConfigDrivenSimulator:
         if wave == "fixed":
             return cfg.get("value", False)
         
+        elif wave == "static":
+            return None
+        
         elif wave == "square":
             return self.engine.square_wave(
                 cfg.get("on", 5),
@@ -471,6 +487,115 @@ class ConfigDrivenSimulator:
         
         return False
     
+    def _encode_float32(self, value: float) -> list:
+        """
+        將 float32 編碼為兩個 16-bit 整數 (Big Endian)
+        Modbus 通常使用兩個暫存器來存儲一個 32 位元浮點數
+        """
+        # Pack float to 4 bytes (Big Endian)
+        packed = struct.pack('>f', value)
+        # Unpack to two 16-bit integers
+        ints = struct.unpack('>HH', packed)
+        return list(ints)
+
+    def _encode_string(self, text: str, length: int) -> list:
+        """
+        將字串編碼為 Modbus 暫存器列表 (每個暫存器存 2 bytes)
+        """
+        # Truncate or pad with null bytes
+        data = text.encode('ascii', errors='ignore')
+        if len(data) > length * 2:
+            data = data[:length*2]
+        else:
+            data = data.ljust(length*2, b'\0')
+            
+        regs = []
+        for i in range(0, len(data), 2):
+            chunk = data[i:i+2]
+            val = struct.unpack('>H', chunk)[0]
+            regs.append(val)
+        return regs
+
+    def _handle_pm5300_command(self, storage: dict, unit_id: int):
+        """
+        處理 Schneider PM5300 的特殊命令邏輯 (High Interaction)
+        1. Command Interface (Energy Reset)
+        2. DO Control (Voltage Cutoff)
+        3. CT Ratio Scaling
+        """
+        regs = storage[unit_id]['holding_registers']
+        coils = storage[unit_id]['coils']
+        
+        # --- 1. Command Interface ---
+        cmd_code = regs.get(5000, 0)
+        semaphore = regs.get(5001, 0)
+        
+        # Command 2020: Reset All Energies
+        if cmd_code == 2020:
+            if 3200 in regs:
+                print(f"[PM5300] Executing Command 2020: Reset All Energies")
+                regs[3200] = 0
+                regs[3201] = 0
+            regs[5002] = 0 # Success
+            regs[5000] = 0 # Clear Command
+            
+        # --- 2. DO Control (DoS Simulation) ---
+        # 假設 Coil 0 是 "Main Breaker Trip Coil"
+        # 如果 Set 為 True，則強制切斷電壓 (Voltage = 0)
+        breaker_trip = coils.get(0, False)
+        # print(f"DEBUG: Breaker Trip Status: {breaker_trip}")
+        if breaker_trip:
+            print("DEBUG: Breaker TRIPPED! Zeroing voltages.")
+            # Force Voltage A/B/C to 0
+            # Voltage A-N (3020), B-N (3022), C-N (3024)
+            for addr in [3020, 3021, 3022, 3023, 3024, 3025]:
+                if addr in regs:
+                    regs[addr] = 0
+                    print(f"DEBUG: Zeroed Reg {addr}")
+                    
+        # --- 3. CT Ratio Scaling ---
+        # 假設 Reg 2012 是 CT Primary (Float32)，預設 100
+        # 如果被修改，Current A/B/C (3000-3005) 應該要依比例變化
+        # 這裡簡化邏輯：我們已經生成的 Current 是基於 Default Ratio (100:5)
+        # 如果現在的 CT Ratio 不是 100，我們就縮放 Current
+        # 注意：這應該在 update_storage 生成完數值後「修正」
+        
+        # 讀取目前 CT Ratio
+        ct_primary = 100.0 # Default
+        if 2012 in regs and 2013 in regs:
+            # Decode float
+            ints = [regs[2012], regs[2013]]
+            packed = struct.pack('>HH', ints[0], ints[1])
+            ct_primary = struct.unpack('>f', packed)[0]
+            
+            # 防呆：避免除以零或負數
+            if ct_primary <= 0: ct_primary = 100.0
+
+        # 如果 CT Ratio 被改成非預設值 (例如 200)，則電流讀數應該放大 2 倍 (因為負載不變，變的是量程定義... 等等)
+        # 不對，如果是 CT Ratio 改變 (例如變壓器換了)，同樣的實際電流 (Primary) 經過不同的 CT，Secondary 會變。
+        # 但 Modbus 讀到的是 "Primary Current" (實際一次側電流)。
+        # 所以如果攻擊者把 CT Ratio 改大 (例如從 100 改成 1000)，
+        # 表示他告訴儀表：「原本 5A 的訊號現在代表 1000A 了！」
+        # 所以同樣的負載訊號，儀表顯示的數值應該會 **變大**。
+        
+        if abs(ct_primary - 100.0) > 0.1:
+            scale_factor = ct_primary / 100.0
+            # 修正 Current A (3000)
+            for start_addr in [3000, 3002, 3004]: # A, B, C
+                if start_addr in regs and (start_addr+1) in regs:
+                    # 先解碼
+                    c_ints = [regs[start_addr], regs[start_addr+1]]
+                    c_packed = struct.pack('>HH', c_ints[0], c_ints[1])
+                    c_val = struct.unpack('>f', c_packed)[0]
+                    
+                    # 應用縮放
+                    new_val = c_val * scale_factor
+                    
+                    # 寫回
+                    new_regs = self._encode_float32(new_val)
+                    regs[start_addr] = new_regs[0]
+                    regs[start_addr+1] = new_regs[1]
+
     def update_storage(self, storage: dict, unit_id: int):
         """
         批量更新 storage 中的所有模擬值
@@ -481,20 +606,41 @@ class ConfigDrivenSimulator:
         """
         # 確保 storage 結構存在
         if unit_id not in storage:
-            storage[unit_id] = {}
-        for key in ['holding_registers', 'coils', 'input_registers', 'discrete_inputs']:
-            if key not in storage[unit_id]:
-                storage[unit_id][key] = {}
+            storage[unit_id] = {'coils': {}, 'holding_registers': {}, 'input_registers': {}, 'discrete_inputs': {}}
         
         # 更新 Holding Registers
         for cfg in self.holding_registers:
             addr = cfg["addr"]
-            storage[unit_id]['holding_registers'][addr] = self._generate_value(cfg, f"hr_{unit_id}_{addr}")
+            val = self._generate_value(cfg, f"hr_{unit_id}_{addr}")
+            
+            # 如果是 static 類型且 val 為 None，則跳過更新 (保留原值)
+            if val is None:
+                # 確保至少有初始值
+                if addr not in storage[unit_id]['holding_registers']:
+                    # 使用 min 作為預設初始值
+                    storage[unit_id]['holding_registers'][addr] = int(cfg.get("min", 0))
+                continue
+
+            # 檢查是否為 float32
+            if cfg.get("type") == "float32":
+                # 浮點數需要佔用兩個暫存器
+                regs = self._encode_float32(float(val))
+                storage[unit_id]['holding_registers'][addr] = regs[0]
+                storage[unit_id]['holding_registers'][addr + 1] = regs[1]
+            
+            elif cfg.get("type") == "string":
+                # String 類型需要多個 Registers
+                length = cfg.get("length", 10) # 預設 10 registers (20 chars)
+                val_str = str(val)
+                regs = self._encode_string(val_str, length)
+                for i, r_val in enumerate(regs):
+                    storage[unit_id]['holding_registers'][addr + i] = r_val
+            
+            else:
+                # 預設為 int16
+                storage[unit_id]['holding_registers'][addr] = int(val)
         
-        # 更新 Coils
-        for cfg in self.coils:
-            addr = cfg["addr"]
-            storage[unit_id]['coils'][addr] = self._generate_bool_value(cfg)
+
         
         # 更新 Input Registers
         for cfg in self.input_registers:
@@ -504,7 +650,25 @@ class ConfigDrivenSimulator:
         # 更新 Discrete Inputs
         for cfg in self.discrete_inputs:
             addr = cfg["addr"]
-            storage[unit_id]['discrete_inputs'][addr] = self._generate_bool_value(cfg)
+            val = self._generate_bool_value(cfg)
+            if val is not None:
+                storage[unit_id]['discrete_inputs'][addr] = bool(val)
+
+        # 更新 Coils
+        for cfg in self.coils:
+            addr = cfg["addr"]
+            val = self._generate_bool_value(cfg)
+            if val is not None:
+                storage[unit_id]['coils'][addr] = bool(val)
+            elif addr not in storage[unit_id]['coils']:
+                 # Default for static if not set
+                 storage[unit_id]['coils'][addr] = bool(cfg.get("value", False))
+
+        # 執行特定設備的邏輯
+        # 這裡簡單判斷：如果存在 PM5300 特有的 Register (例如 5000+3200)，就執行邏輯
+        # 或者未來可以在 json 中加標記
+        if any(r['addr'] == 5000 for r in self.holding_registers):
+            self._handle_pm5300_command(storage, unit_id)
     
     def reload_config(self, new_config: dict):
         """

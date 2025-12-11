@@ -10,12 +10,12 @@ class ModbusPLC:
     Modbus TCP PLC 模擬器
     
     支援三種模擬配置模式：
-    1. 最簡配置（使用預設場景）：
-       simulation_config = {"scenario": "water_treatment"}
+    1. 最簡配置（使用預設配置）：
+       simulation_config = {"profile": "schneider_pm5300"}
        
-    2. 部分覆蓋（基於場景 + 自定義）：
+    2. 部分覆蓋（基於配置 + 自定義）：
        simulation_config = {
-           "scenario": "water_treatment",
+           "profile": "schneider_pm5300",
            "holding_registers": [{"addr": 100, "wave": "sine", "min": 0, "max": 100, "period": 60}]
        }
        
@@ -27,14 +27,12 @@ class ModbusPLC:
            "discrete_inputs": [...]
        }
     
-    可用的預設場景：
-    - water_treatment: 水處理廠
-    - manufacturing: 製造生產線
-    - hvac: 空調系統
-    - power_substation: 電力變電站
+    可用的預設配置 (Profiles)：
+    - schneider_pm5300: Schneider PM5300 電力儀表
     """
     
     def __init__(self, port=502, db: LogDB = None, model="Simulated Modbus Device", 
+                 vendor="Unknown Vendor", revision="V1.0",
                  devices=None, simulation_config=None):
         self.host = '0.0.0.0'
         self.port = port
@@ -49,7 +47,12 @@ class ModbusPLC:
                 self.devices[d.get('unit_id')] = d
         else:
             # Legacy/Single mode: Map Unit ID 1 to default model
-            self.devices[1] = {"unit_id": 1, "model": model}
+            self.devices[1] = {
+                "unit_id": 1, 
+                "model": model,
+                "vendor": vendor,
+                "revision": revision
+            }
         
         # Initialize storage for stateful emulation
         self.storage = {}
@@ -144,12 +147,18 @@ class ModbusPLC:
                 }
 
                 print(f"DEBUG: Received Modbus Func Code: {function_code} (0x{function_code:02X})")
+                
+                func_name = FUNC_NAMES.get(function_code, "Unknown")
+
+                # Refine logging for Function 43 (MEI)
+                if function_code == 43 and len(pdu) > 1 and pdu[1] == 0x0E:
+                    func_name = "Read Device Identification"
 
                 # Extract metadata for ELK
                 meta = {
                     "modbus.unit_id": unit_id,
                     "modbus.func_code": function_code,
-                    "modbus.func_name": FUNC_NAMES.get(function_code, "Unknown"),
+                    "modbus.func_name": func_name,
                     "modbus.trans_id": trans_id
                 }
                 
@@ -336,6 +345,57 @@ class ModbusPLC:
                 
                 return struct.pack('B', func_code) + data[:4]
 
+        elif func_code == 15: # Write Multiple Coils
+            # Request: Start Addr (2), Quantity (2), Byte Count (1), Values (n)
+            # Response: Start Addr (2), Quantity (2)
+            if len(data) >= 6:
+                start_addr, quantity, byte_count = struct.unpack('>HHB', data[:5])
+                values = data[5:]
+                
+                if len(values) < byte_count:
+                    # Incomplete data
+                    return struct.pack('BB', func_code + 0x80, 0x03) # Illegal Data Value
+                    
+                # Process bits
+                for i in range(quantity):
+                    addr = start_addr + i
+                    byte_index = i // 8
+                    bit_index = i % 8
+                    
+                    if byte_index < len(values):
+                        val_byte = values[byte_index]
+                        val = bool(val_byte & (1 << bit_index))
+                        self.storage[unit_id]['coils'][addr] = val
+                
+                print(f"DEBUG: Unit {unit_id} wrote {quantity} coils starting at {start_addr}")
+                
+                # Success response: Start Addr (2), Quantity (2)
+                return struct.pack('B', func_code) + struct.pack('>HH', start_addr, quantity)
+
+        elif func_code == 16: # Write Multiple Registers
+            # Request: Start Addr (2), Quantity (2), Byte Count (1), Values (n*2)
+            # Response: Start Addr (2), Quantity (2)
+            if len(data) >= 6:
+                start_addr, quantity, byte_count = struct.unpack('>HHB', data[:5])
+                values = data[5:]
+                
+                if len(values) < byte_count:
+                     return struct.pack('BB', func_code + 0x80, 0x03)
+                
+                # Process registers
+                for i in range(quantity):
+                    addr = start_addr + i
+                    # Each register is 2 bytes
+                    if (i * 2 + 2) <= len(values):
+                        val_bytes = values[i*2 : i*2+2]
+                        val = struct.unpack('>H', val_bytes)[0]
+                        self.storage[unit_id]['holding_registers'][addr] = val
+                
+                print(f"DEBUG: Unit {unit_id} wrote {quantity} registers starting at {start_addr}")
+                
+                # Success response: Start Addr (2), Quantity (2)
+                return struct.pack('B', func_code) + struct.pack('>HH', start_addr, quantity)
+
         elif func_code == 17: # Report Server ID (0x11)
             # Response: Byte Count (1), Server ID (n), Run Indicator (1)
             # We'll return the model name and Run Indicator 0xFF (Running)
@@ -371,9 +431,13 @@ class ModbusPLC:
                     # return struct.pack('BB', func_code + 0x80, 0x0A)
                     current_model = "Unknown Device"
 
-                vendor_name = b"Schneider Electric"
+                # Get vendor and revision with defaults
+                vendor_str = device_conf.get("vendor", "Unknown Vendor")
+                revision_str = device_conf.get("revision", "V1.0")
+
+                vendor_name = vendor_str.encode('utf-8')
                 product_code = current_model.encode('utf-8')
-                major_minor_revision = b"V1.0.0"
+                major_minor_revision = revision_str.encode('utf-8')
                 
                 objects = [
                     (0x00, vendor_name),

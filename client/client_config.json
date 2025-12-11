@@ -1,25 +1,145 @@
 {
-    "node_id": "yunshiuan_id",
+    "node_id": "node_01",
     "server_url": "http://localhost:8000",
     "plcs": [
         {
             "type": "modbus",
             "enabled": true,
             "port": 502,
-            "model": "yunshiuan_plcName",
+            "model": "PM5300",
+            "vendor": "Schneider Electric",
+            "revision": "V1.0.0",
             "simulation": {
-                "scenario": "water_treatment"
-            }
-        },
-        {
-            "type": "s7comm",
-            "enabled": true,
-            "port": 102,
-            "model": "S7-1200",
-            "simulation": {
-                "scenario": "water_treatment"
+                "profile": "schneider_pm5300",
+                "holding_registers": [
+                    {
+                        "addr": 30,
+                        "type": "string",
+                        "length": 20,
+                        "wave": "static",
+                        "value": "PM5300-Main-Feeder",
+                        "description": "System Name"
+                    },
+                    {
+                        "addr": 2012,
+                        "type": "float32",
+                        "wave": "static",
+                        "value": 100,
+                        "description": "CT Primary Ratio (Default: 100:5)"
+                    },
+                    {
+                        "addr": 3000,
+                        "type": "float32",
+                        "wave": "sine",
+                        "min": 8,
+                        "max": 12,
+                        "period": 3600,
+                        "description": "Current A (Amps)"
+                    },
+                    {
+                        "addr": 3002,
+                        "type": "float32",
+                        "wave": "sine",
+                        "min": 8,
+                        "max": 12,
+                        "period": 3600,
+                        "description": "Current B (Amps)"
+                    },
+                    {
+                        "addr": 3004,
+                        "type": "float32",
+                        "wave": "sine",
+                        "min": 8,
+                        "max": 12,
+                        "period": 3600,
+                        "description": "Current C (Amps)"
+                    },
+                    {
+                        "addr": 3020,
+                        "type": "float32",
+                        "wave": "random_walk",
+                        "min": 220,
+                        "max": 230,
+                        "step": 0.5,
+                        "description": "Voltage A-N (Volts)"
+                    },
+                    {
+                        "addr": 3022,
+                        "type": "float32",
+                        "wave": "random_walk",
+                        "min": 220,
+                        "max": 230,
+                        "step": 0.5,
+                        "description": "Voltage B-N (Volts)"
+                    },
+                    {
+                        "addr": 3024,
+                        "type": "float32",
+                        "wave": "random_walk",
+                        "min": 220,
+                        "max": 230,
+                        "step": 0.5,
+                        "description": "Voltage C-N (Volts)"
+                    },
+                    {
+                        "addr": 3054,
+                        "type": "float32",
+                        "wave": "sine",
+                        "min": 5,
+                        "max": 8,
+                        "period": 3600,
+                        "description": "Active Power Total (kW)"
+                    },
+                    {
+                        "addr": 3110,
+                        "type": "float32",
+                        "wave": "random_walk",
+                        "min": 59.9,
+                        "max": 60.1,
+                        "step": 0.01,
+                        "description": "Frequency (Hz)"
+                    },
+                    {
+                        "addr": 3200,
+                        "type": "float32",
+                        "wave": "random_walk",
+                        "min": 10000,
+                        "max": 50000,
+                        "step": 0.1,
+                        "description": "Active Power Accumulated (kWh)"
+                    },
+                    {
+                        "addr": 5000,
+                        "type": "int16",
+                        "wave": "static",
+                        "min": 0,
+                        "description": "Command Code (2020: Reset Energy)"
+                    },
+                    {
+                        "addr": 5001,
+                        "type": "int16",
+                        "wave": "static",
+                        "min": 0,
+                        "description": "Command Semaphore"
+                    },
+                    {
+                        "addr": 5002,
+                        "type": "int16",
+                        "wave": "static",
+                        "min": 0,
+                        "description": "Command Result"
+                    }
+                ],
+                "coils": [
+                    {
+                        "addr": 0,
+                        "wave": "static",
+                        "value": false,
+                        "description": "Breaker Trip Control (Write 1 to trip)"
+                    }
+                ]
             }
         }
     ],
-    "name": "yunshiuan"
+    "name": "Pending (node_01)"
 }

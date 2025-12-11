@@ -107,6 +107,8 @@ class NodeAgent:
                         port=port, 
                         db=self.db, 
                         model=model,
+                        vendor=plc_conf.get("vendor", "Unknown Vendor"),
+                        revision=plc_conf.get("revision", "V1.0"),
                         devices=plc_conf.get("devices"),
                         simulation_config=simulation_config
                     )

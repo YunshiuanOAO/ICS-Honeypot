@@ -36,3 +36,10 @@ modbus_ip
 # personal use 
 slide/
 tests/
+client/client_config.json
+# Testing & Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+spec/

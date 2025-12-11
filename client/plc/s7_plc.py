@@ -8,14 +8,14 @@ from db.database import LogDB
 from plc.simulation import SimulationEngine, ConfigDrivenSimulator
 
 # 載入場景載入器
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'scenarios'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'profiles'))
 try:
-    from scenario_loader import get_s7_scenario
-    SCENARIOS_AVAILABLE = True
+    from profile_loader import get_s7_profile
+    PROFILES_AVAILABLE = True
 except ImportError:
-    print("[S7PLC] Warning: scenario_loader not found. Scenario support disabled.")
-    SCENARIOS_AVAILABLE = False
-    get_s7_scenario = None
+    print("[S7PLC] Warning: profile_loader not found. Profile support disabled.")
+    PROFILES_AVAILABLE = False
+    get_s7_profile = None
 
 class S7PLC:
     """
@@ -188,7 +188,7 @@ class S7PLC:
         
         配置格式：
         {
-            "scenario": "water_treatment",  # 可選，使用預設場景
+            "profile": "water_treatment",  # 可選，使用預設配置
             "db": {
                 "1": {  # DB1
                     "0": {"type": "INT", "wave": "sine", "min": 200, "max": 800, "period": 300},
@@ -210,28 +210,28 @@ class S7PLC:
             "q": {}
         }
         
-        scenario_name = self.simulation_config.get("scenario")
+        profile_name = self.simulation_config.get("profile")
         
-        # 使用場景載入器（從 JSON 檔案）
-        if scenario_name and SCENARIOS_AVAILABLE:
-            s7_scenario = get_s7_scenario(scenario_name)
-            if s7_scenario:
+        # 使用配置載入器（從 JSON 檔案）
+        if profile_name and PROFILES_AVAILABLE:
+            s7_profile = get_s7_profile(profile_name)
+            if s7_profile:
                 # 載入場景配置
-                config["db"] = s7_scenario.get("db", {})
-                config["m"] = s7_scenario.get("m", {})
-                config["i"] = s7_scenario.get("i", {})
-                config["q"] = s7_scenario.get("q", {})
-                print(f"[S7 Simulator] Loaded scenario from JSON: {scenario_name}")
+                config["db"] = s7_profile.get("db", {})
+                config["m"] = s7_profile.get("m", {})
+                config["i"] = s7_profile.get("i", {})
+                config["q"] = s7_profile.get("q", {})
+                print(f"[S7 Simulator] Loaded profile from JSON: {profile_name}")
             else:
-                print(f"[S7 Simulator] Warning: Scenario '{scenario_name}' not found")
-        elif not self.simulation_config and SCENARIOS_AVAILABLE:
+                print(f"[S7 Simulator] Warning: Profile '{profile_name}' not found")
+        elif not self.simulation_config and PROFILES_AVAILABLE:
             # 沒有指定場景也沒有自定義配置，使用預設水處理廠
-            s7_scenario = get_s7_scenario("water_treatment")
-            if s7_scenario:
-                config["db"] = s7_scenario.get("db", {})
-                config["m"] = s7_scenario.get("m", {})
-                config["i"] = s7_scenario.get("i", {})
-                config["q"] = s7_scenario.get("q", {})
+            s7_profile = get_s7_profile("water_treatment")
+            if s7_profile:
+                config["db"] = s7_profile.get("db", {})
+                config["m"] = s7_profile.get("m", {})
+                config["i"] = s7_profile.get("i", {})
+                config["q"] = s7_profile.get("q", {})
                 print("[S7 Simulator] No config provided, using default: water_treatment (from JSON)")
         
         # 覆蓋自定義配置
