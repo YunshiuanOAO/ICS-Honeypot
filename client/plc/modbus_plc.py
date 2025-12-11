@@ -3,13 +3,44 @@ import threading
 import struct
 import time
 from db.database import LogDB
+from plc.simulation import SimulationEngine, ConfigDrivenSimulator
 
 class ModbusPLC:
-    def __init__(self, port=502, db: LogDB = None, model="Simulated Modbus Device", devices=None):
+    """
+    Modbus TCP PLC 模擬器
+    
+    支援三種模擬配置模式：
+    1. 最簡配置（使用預設場景）：
+       simulation_config = {"scenario": "water_treatment"}
+       
+    2. 部分覆蓋（基於場景 + 自定義）：
+       simulation_config = {
+           "scenario": "water_treatment",
+           "holding_registers": [{"addr": 100, "wave": "sine", "min": 0, "max": 100, "period": 60}]
+       }
+       
+    3. 完整自定義：
+       simulation_config = {
+           "holding_registers": [...],
+           "coils": [...],
+           "input_registers": [...],
+           "discrete_inputs": [...]
+       }
+    
+    可用的預設場景：
+    - water_treatment: 水處理廠
+    - manufacturing: 製造生產線
+    - hvac: 空調系統
+    - power_substation: 電力變電站
+    """
+    
+    def __init__(self, port=502, db: LogDB = None, model="Simulated Modbus Device", 
+                 devices=None, simulation_config=None):
         self.host = '0.0.0.0'
         self.port = port
         self.db = db
         self.default_model = model
+        
         # If devices are provided (Gateway mode), map unit_id to device config
         # Otherwise, treat as a single device (Unit ID 1 by default or any)
         self.devices = {}
@@ -28,12 +59,23 @@ class ModbusPLC:
         self.running = False
         self.sock = None
         self.thread = None
+        
+        # 使用配置驅動的模擬器
+        self.simulation_config = simulation_config or {}
+        self.simulator = ConfigDrivenSimulator(self.simulation_config)
+        self.sim_thread = None
 
     def start(self):
         self.running = True
         self.thread = threading.Thread(target=self._run_server)
         self.thread.daemon = True
         self.thread.start()
+        
+        # Start Simulation Thread
+        self.sim_thread = threading.Thread(target=self._run_simulation)
+        self.sim_thread.daemon = True
+        self.sim_thread.start()
+        
         print(f"Modbus PLC started on port {self.port}")
 
     def stop(self):
@@ -227,19 +269,46 @@ class ModbusPLC:
                 return struct.pack('BB', func_code, byte_count) + resp_data
 
         elif func_code == 2: # Read Discrete Inputs
-            # Similar to Read Coils
+            # Similar to Read Coils, but from discrete_inputs storage
             if len(data) >= 4:
-                quantity = struct.unpack('>H', data[2:4])[0]
+                start_addr, quantity = struct.unpack('>HH', data[:4])
                 byte_count = (quantity + 7) // 8
-                return struct.pack('BB', func_code, byte_count) + b'\x00' * byte_count
+                
+                # Ensure discrete_inputs storage exists
+                if 'discrete_inputs' not in self.storage[unit_id]:
+                    self.storage[unit_id]['discrete_inputs'] = {}
+                
+                # Construct discrete input status bytes
+                di_bytes = bytearray(byte_count)
+                for i in range(quantity):
+                    addr = start_addr + i
+                    # Get value from storage, default to False (0)
+                    val = self.storage[unit_id]['discrete_inputs'].get(addr, False)
+                    if val:
+                        byte_index = i // 8
+                        bit_index = i % 8
+                        di_bytes[byte_index] |= (1 << bit_index)
+                
+                return struct.pack('BB', func_code, byte_count) + di_bytes
 
         elif func_code == 4: # Read Input Registers
-            # Similar to Read Holding Registers
+            # Similar to Read Holding Registers, but from input_registers storage
             if len(data) >= 4:
-                quantity = struct.unpack('>H', data[2:4])[0]
+                start_addr, quantity = struct.unpack('>HH', data[:4])
                 byte_count = quantity * 2
-                val = 0 # Just return 0 for inputs
-                return struct.pack('BB', func_code, byte_count) + (struct.pack('>H', val) * quantity)
+                
+                # Ensure input_registers storage exists
+                if 'input_registers' not in self.storage[unit_id]:
+                    self.storage[unit_id]['input_registers'] = {}
+                
+                resp_data = b""
+                for i in range(quantity):
+                    addr = start_addr + i
+                    # Get value from storage, default to 0
+                    val = self.storage[unit_id]['input_registers'].get(addr, 0)
+                    resp_data += struct.pack('>H', val)
+                
+                return struct.pack('BB', func_code, byte_count) + resp_data
 
         elif func_code == 5: # Write Single Coil
             # Request: Address(2), Value(2)
@@ -329,3 +398,36 @@ class ModbusPLC:
         # Default: Illegal Function (0x01)
         # Error response: Function Code + 0x80, Exception Code
         return struct.pack('BB', func_code + 0x80, 0x01)
+    
+    def _run_simulation(self):
+        """
+        背景執行緒：使用配置驅動的模擬器更新數據
+        
+        配置方式：
+        1. 最簡配置: {"scenario": "water_treatment"}
+        2. 部分覆蓋: {"scenario": "xxx", "holding_registers": [...]}
+        3. 完整自定義: {"holding_registers": [...], "coils": [...], ...}
+        """
+        print("Modbus Simulation Thread Started (Config-Driven)")
+        
+        while self.running:
+            try:
+                # 使用配置驅動的模擬器更新所有設備的數據
+                for unit_id in self.devices:
+                    self.simulator.update_storage(self.storage, unit_id)
+                
+                time.sleep(1)  # 每秒更新一次
+            except Exception as e:
+                print(f"Simulation Error: {e}")
+                time.sleep(5)
+    
+    def reload_simulation_config(self, new_config: dict):
+        """
+        熱更新模擬配置（可從 server 動態下發）
+        
+        Args:
+            new_config: 新的模擬配置字典
+        """
+        self.simulation_config = new_config or {}
+        self.simulator.reload_config(self.simulation_config)
+        print("[ModbusPLC] Simulation config reloaded")

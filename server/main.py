@@ -45,23 +45,48 @@ async def heartbeat(hb: Heartbeat):
     existing = db.get_agent(hb.node_id)
     
     command = "start" # Default command
-    
-    if not existing:
-        # Prevent auto-registration.
-        # Unknown agent logic: Return unregistered status and stop command.
-        return {"status": "unregistered", "command": "stop"}
-    else:
-        # Check if we should adopt client config (First sync)
-        try:
-            current_server_conf = json.loads(existing['config_json'])
-            # Only adopt if server has no PLCs AND user didn't manually set it (we assume manual set has priority)
-            # Actually, if existing logic was "adoption", we keep it. 
-            if not current_server_conf.get('plcs') and hb.config and hb.config.get('plcs'):
-                print(f"Adopting config from agent {hb.node_id}")
-                db.update_agent_config(hb.node_id, hb.config)
-        except Exception as e:
-            print(f"Error syncing config: {e}")
+    response_extras = {}
 
+    if not existing:
+        # 1. Adoption Check: Check if this node_id was renamed to something else
+        # Scan all agents to see if 'original_id' matches hb.node_id
+        # (Optimization: In a large system this should be a DB query, but fine for prototype)
+        all_agents = db.get_all_agents()
+        adopted_agent = None
+        for agent in all_agents:
+            try:
+                conf = json.loads(agent['config_json'])
+                if conf.get('original_id') == hb.node_id:
+                    adopted_agent = agent
+                    break
+            except:
+                pass
+        
+        if adopted_agent:
+            # Found! This agent was renamed. Tell client to update.
+            print(f"Adoption match: {hb.node_id} -> {adopted_agent['node_id']}")
+            return {
+                "status": "adopted", 
+                "command": "stop", # Stop temporarily to reload
+                "new_node_id": adopted_agent['node_id']
+            }
+
+        # 2. Auto-Registration for Unknown Agents
+        print(f"Auto-registering new agent: {hb.node_id} ({hb.ip})")
+        # Create a default pending config
+        pending_config = {
+            "node_id": hb.node_id,
+            "server_url": "http://localhost:8000",
+            "plcs": [], # Empty PLCs
+            "original_id": hb.node_id # Track itself initially
+        }
+        db.register_agent(hb.node_id, name=f"Pending ({hb.node_id})", ip=hb.ip, config=pending_config)
+        # Mark as standby initially? Or let it run (with 0 PLCs it does nothing)
+        # We'll just return OK.
+        return {"status": "registered", "command": "start"}
+
+    else:
+        # Existing Agent
         db.update_heartbeat(hb.node_id)
         
         # Check active status
@@ -74,14 +99,62 @@ async def heartbeat(hb: Heartbeat):
 async def get_config(node_id: str):
     agent = db.get_agent(node_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found. Please register manually.")
+        raise HTTPException(status_code=404, detail="Agent not found. please wait for auto-registration.")
 
-    return JSONResponse(content=json.loads(agent['config_json']))
+    response_data = json.loads(agent['config_json'])
+    response_data['name'] = agent['name'] # Ensure we return the authoritative name
+    return JSONResponse(content=response_data)
 
 @app.post("/api/logs")
 async def upload_logs(batch: LogBatch):
     count = db.insert_logs(batch.node_id, batch.logs)
     return {"status": "recieved", "count": count}
+
+# --- Profile Endpoints ---
+ 
+# Point to client/profiles directory
+# Assuming structure: /root/server/main.py and /root/client/profiles
+PROFILES_DIR = os.path.join(os.path.dirname(BASE_DIR), "client", "profiles")
+
+@app.get("/api/profiles")
+async def list_profiles():
+    """List available profile files"""
+    if not os.path.exists(PROFILES_DIR):
+        print(f"Warning: Profiles dir not found: {PROFILES_DIR}")
+        return []
+    
+    profiles = []
+    for f in os.listdir(PROFILES_DIR):
+        if f.endswith(".json"):
+            name = f.replace(".json", "")
+            # Read minimal metadata
+            try:
+                with open(os.path.join(PROFILES_DIR, f), 'r') as file:
+                    data = json.load(file)
+                    desc = data.get("description", "No description")
+                    profiles.append({
+                        "name": name,
+                        "description": desc,
+                        # Check protocols
+                        "type": "modbus" if "modbus" in data else "s7comm" # Simple heuristic
+                    })
+            except:
+                continue
+    return profiles
+
+@app.get("/api/profiles/{name}")
+async def get_profile(name: str):
+    """Get full content of a profile"""
+    file_path = os.path.join(PROFILES_DIR, f"{name}.json")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    try:
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # --- Web UI Endpoints ---
 
@@ -131,12 +204,32 @@ async def recent_logs():
 
 @app.post("/api/update_agent_config")
 async def update_agent_config(payload: Dict[str, Any]):
-    node_id = payload.get("node_id")
+    current_node_id = payload.get("node_id")
+    new_node_id = payload.get("new_node_id")
     config = payload.get("config")
-    if node_id and config:
-        db.update_agent_config(node_id, config)
-        return {"status": "updated"}
-    return {"status": "error"}
+    name = payload.get("name")
+    
+    if not current_node_id or not config:
+        return {"status": "error", "message": "Missing node_id or config"}
+
+    # Handle Rename
+    target_node_id = current_node_id
+    if new_node_id and new_node_id != current_node_id:
+        success, msg = db.rename_agent(current_node_id, new_node_id)
+        if not success:
+            return {"status": "error", "message": f"Rename failed: {msg}"}
+        target_node_id = new_node_id
+        
+        # Update config object to match new ID
+        config['node_id'] = target_node_id
+        
+        # KEY CHANGE: Store original ID so we can track adoption
+        config['original_id'] = current_node_id 
+
+    # Update Config and Name
+    db.update_agent_config(target_node_id, config, name=name)
+    
+    return {"status": "updated", "new_node_id": target_node_id}
 
 @app.post("/api/admin/sync_elk")
 async def sync_elk():

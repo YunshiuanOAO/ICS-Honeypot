@@ -4,27 +4,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Honeypot Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>APS Honeypot Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css?v=20">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 
 <body>
+    <!-- Toast Container -->
+    <div id="toast-container"></div>
+
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="logo">
-                <h2>APS HONEYPOT</h2>
-                <div class="status-indicator online">Server Online</div>
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                        <path d="M2 17l10 5 10-5" />
+                        <path d="M2 12l10 5 10-5" />
+                    </svg>
+                </div>
+                <div class="logo-text">
+                    <h2>APS HONEYPOT</h2>
+                    <span class="logo-subtitle">Industrial Control System</span>
+                </div>
+            </div>
+
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                <span>System Online</span>
             </div>
 
             <nav class="nav-menu">
-                <button class="nav-item active" onclick="showSection('dashboard')">Dashboard</button>
-                <button class="nav-item" onclick="showSection('agents')">Agents</button>
-                <button class="nav-item" onclick="showSection('logs')">Live Logs</button>
+                <button class="nav-item active" data-section="dashboard" onclick="showSection('dashboard')">
+                    <i data-lucide="layout-dashboard"></i>
+                    <span>Dashboard</span>
+                </button>
+                <button class="nav-item" data-section="agents" onclick="showSection('agents')">
+                    <i data-lucide="cpu"></i>
+                    <span>Agents</span>
+                </button>
+                <button class="nav-item" data-section="logs" onclick="showSection('logs')">
+                    <i data-lucide="terminal"></i>
+                    <span>Live Logs</span>
+                </button>
             </nav>
+
+            <div class="sidebar-footer">
+                <div class="connection-info">
+                    <i data-lucide="wifi"></i>
+                    <span>Connected</span>
+                </div>
+            </div>
         </aside>
 
         <!-- Main Content -->
@@ -33,23 +70,60 @@
             <!-- Dashboard Section -->
             <section id="dashboard" class="content-section">
                 <header class="page-header">
-                    <h1>Dashboard Overview</h1>
-                    <button class="btn btn-primary" onclick="refreshData()">Refresh</button>
+                    <div class="header-title">
+                        <h1>Dashboard</h1>
+                        <p class="header-subtitle">Real-time monitoring overview</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="refreshData()">
+                        <i data-lucide="refresh-cw"></i>
+                        <span>Refresh</span>
+                    </button>
                 </header>
 
                 <div class="stats-grid">
-                    <div class="stat-card">
-                        <h3>Active Agents</h3>
-                        <div class="stat-value" id="active-agents-count">0</div>
+                    <div class="stat-card stat-agents">
+                        <div class="stat-icon">
+                            <i data-lucide="cpu"></i>
+                        </div>
+                        <div class="stat-info">
+                            <span class="stat-label">Active Agents</span>
+                            <div class="stat-value" id="active-agents-count">0</div>
+                        </div>
+                        <div class="stat-decoration"></div>
                     </div>
-                    <div class="stat-card">
-                        <h3>Total Logs</h3>
-                        <div class="stat-value" id="total-logs-count">--</div>
+                    <div class="stat-card stat-logs">
+                        <div class="stat-icon">
+                            <i data-lucide="file-text"></i>
+                        </div>
+                        <div class="stat-info">
+                            <span class="stat-label">Total Logs</span>
+                            <div class="stat-value" id="total-logs-count">--</div>
+                        </div>
+                        <div class="stat-decoration"></div>
+                    </div>
+                    <div class="stat-card stat-alerts">
+                        <div class="stat-icon">
+                            <i data-lucide="shield-alert"></i>
+                        </div>
+                        <div class="stat-info">
+                            <span class="stat-label">Recent Alerts</span>
+                            <div class="stat-value" id="alerts-count">0</div>
+                        </div>
+                        <div class="stat-decoration"></div>
                     </div>
                 </div>
 
                 <div class="recent-activity">
-                    <h3>Recent Alerts</h3>
+                    <div class="section-header">
+                        <h3>
+                            <i data-lucide="activity"></i>
+                            Recent Activity
+                        </h3>
+                        <span class="live-indicator">
+                            <span class="live-dot"></span>
+                            Live
+                        </span>
+                    </div>
                     <div class="log-table-container">
                         <table class="log-table">
                             <thead>
@@ -65,6 +139,10 @@
                                 <!-- Populated by JS -->
                             </tbody>
                         </table>
+                        <div class="table-empty-state hidden" id="table-empty">
+                            <i data-lucide="inbox"></i>
+                            <p>No activity recorded yet</p>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -72,8 +150,16 @@
             <!-- Agents Section -->
             <section id="agents" class="content-section hidden">
                 <header class="page-header">
-                    <h1>Agent Management</h1>
-                    <button class="btn btn-primary" onclick="showAddAgentModal()">+ Add Agent</button>
+                    <div class="header-title">
+                        <h1>Agent Management</h1>
+                        <p class="header-subtitle">Configure and monitor honeypot agents</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-primary" onclick="loadAgents()">
+                            <i data-lucide="refresh-cw"></i>
+                            <span>Refresh</span>
+                        </button>
+                    </div>
                 </header>
 
                 <div class="agents-grid" id="agents-grid">
@@ -84,63 +170,131 @@
             <!-- Logs Section -->
             <section id="logs" class="content-section hidden">
                 <header class="page-header">
-                    <h1>Live Logs</h1>
+                    <div class="header-title">
+                        <h1>Live Logs</h1>
+                        <p class="header-subtitle">Real-time log stream</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-secondary" id="log-pause-btn" onclick="toggleLogPause()">
+                            <i data-lucide="pause"></i>
+                            <span>Pause</span>
+                        </button>
+                        <button class="btn btn-secondary" onclick="clearLogConsole()">
+                            <i data-lucide="trash-2"></i>
+                            <span>Clear</span>
+                        </button>
+                    </div>
                 </header>
-                <div class="log-console" id="log-console">
-                    <!-- Text based logs -->
+                <div class="log-console-wrapper">
+                    <div class="log-console-header">
+                        <span class="console-title">
+                            <i data-lucide="terminal"></i>
+                            Console Output
+                        </span>
+                        <span class="console-status" id="console-status">
+                            <span class="status-dot streaming"></span>
+                            Streaming
+                        </span>
+                    </div>
+                    <div class="log-console" id="log-console">
+                        <div class="log-entry info">
+                            <span class="log-time">[System]</span>
+                            <span class="log-message">Waiting for logs...</span>
+                        </div>
+                    </div>
                 </div>
             </section>
         </main>
     </div>
 
-    <div id="add-agent-modal" class="modal hidden">
-        <div class="modal-content">
-            <span class="close-modal" onclick="closeAddAgentModal()">&times;</span>
-            <h2>Add New Agent</h2>
-            <div class="form-group">
-                <label>Node ID</label>
-                <input type="text" id="new-agent-id" placeholder="e.g. node_02">
-            </div>
-            <div class="form-group">
-                <label>Name</label>
-                <input type="text" id="new-agent-name" placeholder="e.g. Factory Line B">
-            </div>
-            <div class="form-group">
-                <label>Default IP (Optional)</label>
-                <input type="text" id="new-agent-ip" placeholder="0.0.0.0">
-            </div>
-            <div class="form-group">
-                <label>Initial Configuration (JSON)</label>
-                <textarea id="new-agent-config" rows="10" placeholder='{"plcs": [...]}'></textarea>
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeAddAgentModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveNewAgent()">Add Agent</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Agent Config Modal -->
+    <!-- Agent Config Modal (Edit) -->
     <div id="config-modal" class="modal hidden">
-        <div class="modal-content">
-            <span class="close-modal" onclick="closeModal()">&times;</span>
-            <h2>Edit Configuration</h2>
-            <div class="form-group">
-                <label>Node ID</label>
-                <input type="text" id="config-node-id" readonly>
+        <div class="modal-overlay" onclick="closeModal()"></div>
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2>
+                    <i data-lucide="settings"></i>
+                    Edit Configuration
+                </h2>
+                <button class="close-modal" onclick="closeModal()">
+                    <i data-lucide="x"></i>
+                </button>
             </div>
-            <div class="form-group">
-                <label>Configuration (JSON)</label>
-                <textarea id="config-json" rows="15"></textarea>
+
+            <!-- Tab Navigation -->
+            <div class="config-tabs">
+                <button class="config-tab active" onclick="showConfigTab('form')">
+                    <i data-lucide="layout-list"></i>
+                    Form View
+                </button>
+                <button class="config-tab" onclick="showConfigTab('json')">
+                    <i data-lucide="code"></i>
+                    JSON View
+                </button>
             </div>
+
+            <div class="modal-body">
+                <!-- Form View -->
+                <div id="config-form-view" class="config-view">
+                    <input type="hidden" id="config-node-id-original">
+                    <div class="form-section">
+                        <h4 class="form-section-title">Basic Information</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Node ID</label>
+                                <input type="text" id="edit-node-id" placeholder="unique-node-id">
+                            </div>
+                            <div class="form-group">
+                                <label>Name</label>
+                                <input type="text" id="edit-agent-name" placeholder="Agent Name">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group full-width">
+                                <label>Server URL</label>
+                                <input type="text" id="edit-server-url" placeholder="http://localhost:8000">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <div class="plc-list-header">
+                            <h4 class="form-section-title">PLC Devices</h4>
+                            <button class="btn btn-secondary btn-sm" onclick="addEditPlcConfig()">
+                                <i data-lucide="plus"></i>
+                                Add PLC
+                            </button>
+                        </div>
+                        <div id="edit-plc-config-list">
+                            <!-- PLC configs for editing -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- JSON View -->
+                <div id="config-json-view" class="config-view hidden">
+                    <div class="form-group">
+                        <label>Configuration (JSON)</label>
+                        <textarea id="config-json" rows="20" spellcheck="false"></textarea>
+                    </div>
+                </div>
+            </div>
+
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+                <button class="btn btn-primary" onclick="saveConfig()">
+                    <i data-lucide="save"></i>
+                    Save Changes
+                </button>
             </div>
         </div>
     </div>
 
-    <script src="/static/script.js?v=2"></script>
+    <script src="/static/script.js?v=24"></script>
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
 </body>
 
 </html>

@@ -1,0 +1,25 @@
+{
+    "node_id": "yunshiuan_id",
+    "server_url": "http://localhost:8000",
+    "plcs": [
+        {
+            "type": "modbus",
+            "enabled": true,
+            "port": 502,
+            "model": "yunshiuan_plcName",
+            "simulation": {
+                "scenario": "water_treatment"
+            }
+        },
+        {
+            "type": "s7comm",
+            "enabled": true,
+            "port": 102,
+            "model": "S7-1200",
+            "simulation": {
+                "scenario": "water_treatment"
+            }
+        }
+    ],
+    "name": "yunshiuan"
+}

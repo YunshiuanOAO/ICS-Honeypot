@@ -1,0 +1,56 @@
+{
+    "name": "Manufacturing Production Line",
+    "description": "模擬自動化組裝產線，包含輸送帶、機械手臂和品質檢測",
+    "author": "ICS Honeypot Team",
+    "version": "1.0",
+    "modbus": {
+        "registers": [
+            {"addr": 0, "name": "motor_rpm", "wave": "random_walk", "min": 1400, "max": 1600, "step": 10, "description": "馬達轉速 (RPM)"},
+            {"addr": 1, "name": "motor_current_x10", "wave": "random_walk", "min": 100, "max": 150, "step": 5, "description": "馬達電流 x10 (A)"},
+            {"addr": 2, "name": "bearing_temp_x10", "wave": "sine", "min": 450, "max": 550, "period": 1800, "description": "軸承溫度 x10 (°C)"},
+            {"addr": 3, "name": "vibration_x100", "wave": "random_walk", "min": 20, "max": 50, "step": 3, "description": "振動 x100 (mm/s)"},
+            {"addr": 4, "name": "product_count", "wave": "counter", "max": 9999, "description": "生產計數"},
+            {"addr": 5, "name": "good_count", "wave": "counter", "max": 9500, "description": "良品計數"},
+            {"addr": 6, "name": "reject_count", "wave": "counter", "max": 500, "description": "不良品計數"},
+            {"addr": 7, "name": "production_rate", "wave": "random_walk", "min": 40, "max": 55, "step": 2, "description": "生產速率 (件/分)"},
+            {"addr": 8, "name": "conveyor_speed", "wave": "random_walk", "min": 80, "max": 120, "step": 5, "description": "輸送帶速度 (%)"},
+            {"addr": 9, "name": "air_pressure", "wave": "random_walk", "min": 480, "max": 520, "step": 5, "description": "氣壓 (kPa)"}
+        ],
+        "coils": [
+            {"addr": 0, "name": "line_running", "wave": "fixed", "value": true, "description": "產線運行中"},
+            {"addr": 1, "name": "conveyor_enable", "wave": "fixed", "value": true, "description": "輸送帶啟用"},
+            {"addr": 2, "name": "robot_enable", "wave": "fixed", "value": true, "description": "機械手臂啟用"},
+            {"addr": 3, "name": "qc_station_busy", "wave": "square", "on": 8, "off": 2, "description": "品檢站忙碌"},
+            {"addr": 4, "name": "alarm_active", "wave": "random", "probability": 0.02, "description": "警報啟動"},
+            {"addr": 5, "name": "maintenance_mode", "wave": "fixed", "value": false, "description": "維護模式"}
+        ],
+        "input_registers": [
+            {"addr": 0, "name": "vision_quality", "wave": "random_walk", "min": 85, "max": 98, "step": 2, "description": "視覺檢測品質分數"}
+        ],
+        "discrete_inputs": [
+            {"addr": 0, "name": "safety_guard", "wave": "fixed", "value": true, "description": "安全護罩"},
+            {"addr": 1, "name": "emergency_stop_pressed", "wave": "fixed", "value": false, "description": "緊急停止"}
+        ]
+    },
+    "s7": {
+        "db": {
+            "1": {
+                "0": {"type": "INT", "wave": "random_walk", "min": 1400, "max": 1600, "step": 10, "name": "motor_rpm"},
+                "2": {"type": "INT", "wave": "random_walk", "min": 100, "max": 150, "step": 5, "name": "motor_current_x10"},
+                "4": {"type": "INT", "wave": "sine", "min": 450, "max": 550, "period": 1800, "name": "bearing_temp_x10"},
+                "6": {"type": "INT", "wave": "random_walk", "min": 20, "max": 50, "step": 3, "name": "vibration_x100"},
+                "8": {"type": "INT", "wave": "sawtooth", "min": 0, "max": 9999, "period": 600, "name": "product_count"},
+                "10": {"type": "INT", "wave": "sawtooth", "min": 0, "max": 9500, "period": 600, "name": "good_count"},
+                "12": {"type": "INT", "wave": "random_walk", "min": 40, "max": 55, "step": 2, "name": "production_rate"},
+                "14": {"type": "INT", "wave": "random_walk", "min": 480, "max": 520, "step": 5, "name": "air_pressure"},
+                "16": {"type": "INT", "wave": "random_walk", "min": 60, "max": 70, "step": 2, "name": "oil_pressure"},
+                "18": {"type": "INT", "wave": "sine", "min": 250, "max": 300, "period": 28800, "name": "ambient_temp_x10"}
+            }
+        },
+        "m": {
+            "0": {"type": "BYTE", "wave": "status_flags"},
+            "10": {"type": "BYTE", "wave": "counter"}
+        }
+    }
+}
+

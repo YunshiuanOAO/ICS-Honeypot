@@ -136,13 +136,41 @@ class ServerDB:
             
         return agents
         
-    def update_agent_config(self, node_id, config_dict):
+    def update_agent_config(self, node_id, config_dict, name=None):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         config_str = json.dumps(config_dict)
-        cursor.execute('UPDATE agents SET config_json = ? WHERE node_id = ?', (config_str, node_id))
+        
+        if name:
+            cursor.execute('UPDATE agents SET config_json = ?, name = ? WHERE node_id = ?', (config_str, name, node_id))
+        else:
+            cursor.execute('UPDATE agents SET config_json = ? WHERE node_id = ?', (config_str, node_id))
+            
         conn.commit()
         conn.close()
+
+    def rename_agent(self, old_node_id, new_node_id):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            # Check if new ID exists
+            cursor.execute('SELECT 1 FROM agents WHERE node_id = ?', (new_node_id,))
+            if cursor.fetchone():
+                return False, "New Node ID already exists"
+
+            # Update agents table
+            cursor.execute('UPDATE agents SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            
+            # Update logs table
+            cursor.execute('UPDATE logs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            
+            conn.commit()
+            return True, "Renamed successfully"
+        except Exception as e:
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
 
     def delete_agent(self, node_id):
         conn = sqlite3.connect(self.db_path)
