@@ -13,7 +13,7 @@ The project follows a localized Client-Server architecture:
   - **Elasticsearch**: Indexes the logs.
   - **Kibana**: Visualizes the data (attack type, source IP, protocols used).
 
-[architecture](../assets/arch.png)
+![architecture](../assets/arch.png)
 
 ## Features
 
