@@ -92,22 +92,7 @@ class ProfileLoader:
         
         return profile.get('modbus', {})
     
-    def get_s7_config(self, profile_name: str) -> Optional[Dict]:
-        """
-        獲取配置的 S7 設定
-        
-        Args:
-            profile_name: 配置名稱
-        
-        Returns:
-            S7 配置字典 (db, m, i, q)
-        """
-        profile = self.load_profile(profile_name)
-        if profile is None:
-            return None
-        
-        return profile.get('s7', {})
-    
+
     def list_profiles(self) -> List[str]:
         """
         列出所有可用的配置名稱
@@ -194,20 +179,6 @@ def get_modbus_profile(profile_name: str) -> Optional[Dict]:
     return loader.get_modbus_config(profile_name)
 
 
-def get_s7_profile(profile_name: str) -> Optional[Dict]:
-    """
-    便捷函數：獲取 S7 配置設定
-    
-    Args:
-        profile_name: 配置名稱
-    
-    Returns:
-        S7 配置字典
-    """
-    loader = get_profile_loader()
-    return loader.get_s7_config(profile_name)
-
-
 if __name__ == "__main__":
     # 測試載入器
     loader = get_profile_loader()
@@ -224,8 +195,5 @@ if __name__ == "__main__":
         print(f"Modbus Registers: {len(modbus_cfg.get('registers', []))}")
         print(f"Modbus Coils: {len(modbus_cfg.get('coils', []))}")
     
-    s7_cfg = get_s7_profile("water_treatment")
-    if s7_cfg:
-        print(f"S7 DBs: {len(s7_cfg.get('db', {}))}")
-        print(f"S7 Merkers: {len(s7_cfg.get('m', {}))}")
+
 

@@ -238,13 +238,12 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'profiles'))
 
 try:
-    from profile_loader import get_modbus_profile, get_s7_profile, get_profile_loader
+    from profile_loader import get_modbus_profile, get_profile_loader
     PROFILES_AVAILABLE = True
 except ImportError:
     print("[Simulation] Warning: profile_loader not found. Profile support disabled.")
     PROFILES_AVAILABLE = False
     get_modbus_profile = None
-    get_s7_profile = None
 
 
 

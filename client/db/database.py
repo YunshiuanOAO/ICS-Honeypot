@@ -35,10 +35,10 @@ class LogDB:
         conn.commit()
         conn.close()
 
-    def log_interaction(self, attacker_ip, protocol, request_data, response_data, metadata=None):
+    def log_interaction(self, attacker_ip, protocol, request_data, response_data, metadata=None, timestamp=None):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        timestamp = datetime.now().isoformat()
+        timestamp = timestamp or datetime.now().isoformat()
         
         # Convert dicts/bytes to string for storage if necessary
         if isinstance(request_data, (dict, list)):
