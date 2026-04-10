@@ -19,7 +19,7 @@ class ConfigLoader:
 
         random_suffix = uuid.uuid4().hex[:8]
         return {
-            "server_url": "http://localhost:8000",
+            "server_url": os.environ.get("CLIENT_SERVER_URL", "").strip() or "http://localhost:8000",
             "node_id": f"pending_{random_suffix}",
             "deployments": [],
         }

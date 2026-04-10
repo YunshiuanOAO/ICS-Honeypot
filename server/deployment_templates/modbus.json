@@ -1,0 +1,33 @@
+{
+  "id": "modbus",
+  "name": "Modbus Honeypot",
+  "description": "Custom Modbus honeypot package with protocol-aware proxy logging.",
+  "source_dir": "modbus-honeypot",
+  "proxy": {
+    "enabled": true,
+    "protocol": "modbus",
+    "listen_port": 5020,
+    "backend_port": 15020
+  },
+  "log_paths": [
+    "logs/events.jsonl"
+  ],
+  "files": [
+    {
+      "path": "Dockerfile",
+      "content": "FROM python:3.12-slim\nWORKDIR /app\nCOPY app.py deployment.json ./\nCMD [\"python\", \"app.py\"]\n"
+    },
+    {
+      "path": "docker-compose.yml",
+      "content": "services:\n  honeypot:\n    build: .\n    container_name: modbus-honeypot\n    restart: unless-stopped\n    ports:\n      - \"127.0.0.1:${BACKEND_PORT:-15020}:5020\"\n    volumes:\n      - ${HONEYPOT_LOGS_DIR}:/app/logs\n      - ${HONEYPOT_DATA_DIR}:/app/data\n"
+    },
+    {
+      "path": "deployment.json",
+      "content": "{\n  \"listen_port\": 5020,\n  \"device_name\": \"PM5300\"\n}\n"
+    },
+    {
+      "path": "app.py",
+      "content": "import json\nimport os\nimport socket\nimport threading\nfrom datetime import datetime\n\nBASE_DIR = os.path.dirname(os.path.abspath(__file__))\nCONFIG_PATH = os.path.join(BASE_DIR, \"deployment.json\")\nLOG_DIR = os.path.join(BASE_DIR, \"logs\")\nLOG_PATH = os.path.join(LOG_DIR, \"events.jsonl\")\nos.makedirs(LOG_DIR, exist_ok=True)\n\nwith open(CONFIG_PATH, \"r\", encoding=\"utf-8\") as handle:\n    CONFIG = json.load(handle)\n\nHOST = \"0.0.0.0\"\nPORT = int(CONFIG.get(\"listen_port\", 5020))\nDEVICE_NAME = CONFIG.get(\"device_name\", \"Modbus Honeypot\")\n\ndef write_event(client_ip, payload, response):\n    event = {\n        \"timestamp\": datetime.utcnow().isoformat(),\n        \"attacker_ip\": client_ip,\n        \"protocol\": \"modbus\",\n        \"request_data\": payload.hex(),\n        \"response_data\": response.hex() if response else \"\",\n        \"metadata\": {\n            \"device_name\": DEVICE_NAME,\n            \"byte_length\": len(payload)\n        }\n    }\n    with open(LOG_PATH, \"a\", encoding=\"utf-8\") as handle:\n        handle.write(json.dumps(event) + \"\\n\")\n\ndef build_response(payload):\n    if len(payload) < 8:\n        return b\"\"\n    transaction_id = payload[:2]\n    protocol_id = payload[2:4]\n    unit_id = payload[6:7]\n    function_code = payload[7]\n    return transaction_id + protocol_id + b\"\\x00\\x03\" + unit_id + bytes([function_code, 0x01])\n\ndef handle_client(conn, addr):\n    with conn:\n        while True:\n            data = conn.recv(4096)\n            if not data:\n                return\n            response = build_response(data)\n            write_event(addr[0], data, response)\n            if response:\n                conn.sendall(response)\n\ndef main():\n    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n    sock.bind((HOST, PORT))\n    sock.listen(50)\n    while True:\n        conn, addr = sock.accept()\n        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()\n\nif __name__ == \"__main__\":\n    main()\n"
+    }
+  ]
+}

@@ -1,45 +1,96 @@
+# ============================
 # Python
+# ============================
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.pyd
+*.so
 .Python
+
+# Virtual environments
 env/
 venv/
 .venv/
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Database
+# ============================
+# Secrets & Environment
+# ============================
+# ⚠️ CRITICAL: Never commit .env files — they contain API keys & passwords
+.env
+auth_secrets.json
+
+# ============================
+# Databases
+# ============================
 *.db
 *.sqlite3
 
-# Logs
+# ============================
+# Runtime & Generated Data
+# ============================
+# Client runtime (Docker containers, proxy logs, collected data)
+client/runtime/
+client/client_config.json
+client/agent.log
+
+# Server runtime
+server/uploads/
+server/logs/
+server/package_library/
+
+# General logs
 *.log
 logs/
-server/logs/
 
-# System
+# ============================
+# ELK Stack (Docker volumes)
+# ============================
+# These are managed by docker-compose volumes, not tracked in git
+server/elk/es_data/
+server/elk/filebeat_data/
+
+# ============================
+# OS Files
+# ============================
 .DS_Store
 .AppleDouble
 .LSOverride
 Thumbs.db
+Desktop.ini
+~$*
 
-# IDE
+# ============================
+# Editors & IDEs
+# ============================
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
-# Project Specific
-modbus_ip
-.env
-
-# personal use 
-slide/
-tests/
-client/client_config.json
+# ============================
 # Testing & Coverage
+# ============================
 .coverage
 htmlcov/
 .pytest_cache/
 .mypy_cache/
+test_*.html
+
+# ============================
+# Project-local / Personal
+# ============================
+modbus_ip
+slide/
+tests/
 spec/
+
+# AI assistant config
+.claude/

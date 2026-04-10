@@ -142,8 +142,23 @@ class DockerDeploymentManager:
             "-v", f"{self._data_root(deployment)}:/honeypot/data",
         ]
 
+        # Check if proxy is configured - if so, use backend_port for host mapping
+        proxy_config = deployment.get("proxy", {})
+        backend_port = proxy_config.get("backend_port")
+        
+        # Reserved ports that should not be auto-mapped (e.g., server port)
+        reserved_ports = {8000}  # FastAPI server port
+        
         for port in self._infer_exposed_ports(deployment):
-            command.extend(["-p", f"{port}:{port}"])
+            if backend_port:
+                # Use proxy's backend_port for host mapping
+                command.extend(["-p", f"{backend_port}:{port}"])
+            elif int(port) in reserved_ports:
+                # Skip reserved ports - don't auto-map them
+                print(f"[DockerManager] Skipping reserved port {port} for {deployment.get('id')}")
+                continue
+            else:
+                command.extend(["-p", f"{port}:{port}"])
 
         command.append(image_name)
         return self._run(command, cwd=source_root)
@@ -399,6 +414,12 @@ class DockerDeploymentManager:
         with open(env_path, "w", encoding="utf-8") as handle:
             handle.write(f"HONEYPOT_DATA_DIR={self._data_root(deployment)}\n")
             handle.write(f"HONEYPOT_LOGS_DIR={self._logs_root(deployment)}\n")
+            
+            # Add proxy backend port if configured
+            proxy_config = deployment.get("proxy", {})
+            backend_port = proxy_config.get("backend_port")
+            if backend_port:
+                handle.write(f"BACKEND_PORT={backend_port}\n")
 
     def _update_single_status(self, deployment, compose_result=None):
         deployment_id = deployment["id"]

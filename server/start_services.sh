@@ -107,6 +107,15 @@ echo " -> Kibana: http://localhost:5601"
 echo "Starting Honeypot Server..."
 cd "$SCRIPT_DIR" || exit
 
+# Detect public URL for display
+SERVER_URL="http://localhost:8000"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    PUBLIC_URL=$(grep -E "^SERVER_PUBLIC_URL=" "$SCRIPT_DIR/.env" | cut -d'=' -f2- | xargs)
+    if [ -n "$PUBLIC_URL" ]; then
+        SERVER_URL="$PUBLIC_URL"
+    fi
+fi
+
 # Run the server
-echo "Server running at http://localhost:8000 (Ctrl+C to stop)"
+echo "Server running at $SERVER_URL (Ctrl+C to stop)"
 python3 main.py

@@ -70,7 +70,7 @@ async function loadConfig() {
         agentConfig = {
             node_id: config.node_id || NODE_ID,
             name: config.name || "",
-            server_url: config.server_url || "http://localhost:8000",
+            server_url: config.server_url || window.location.origin,
             deployments: Array.isArray(config.deployments) ? config.deployments.map((d, i) => ({
                 id: d.id || `deployment-${i + 1}`,
                 name: d.name || `Deployment ${i + 1}`,

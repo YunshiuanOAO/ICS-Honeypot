@@ -1,0 +1,5 @@
+{
+    "node_id": "your_node_id",
+    "server_url": "http://<SERVER_IP>:8000",
+    "deployments": []
+}

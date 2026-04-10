@@ -1,7 +1,9 @@
-from fastapi import FastAPI, Request, HTTPException, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, HTTPException, Form, UploadFile, File, Depends, Header
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 import uvicorn
@@ -9,11 +11,11 @@ import os
 import shutil
 import uuid
 import zipfile
+import json
 from pathlib import Path
 from datetime import datetime
 from database import ServerDB
-
-app = FastAPI(title="Honeypot Central Server")
+from auth_config import load_secrets, verify_password, verify_api_key
 
 # Resolve paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,13 +25,95 @@ TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
 db = ServerDB(DB_PATH)
 
+# Load auth secrets from .env
+auth_secrets = load_secrets()
+
+# Server public URL for client-agent communication (set in .env for EC2 deployment)
+SERVER_PUBLIC_URL = os.environ.get("SERVER_PUBLIC_URL", "").strip()
+KIBANA_URL = os.environ.get("KIBANA_URL", "").strip()
+
+
+def get_server_public_url(request: Request = None) -> str:
+    """Return the public server URL for client agents.
+    Priority: SERVER_PUBLIC_URL env var > auto-detect from request host header > localhost fallback.
+    """
+    if SERVER_PUBLIC_URL:
+        return SERVER_PUBLIC_URL.rstrip("/")
+    if request:
+        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+        host = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
+        if host:
+            return f"{scheme}://{host}"
+    return "http://localhost:8000"
+
+
+app = FastAPI(title="Honeypot Central Server")
+
+# Add CORS middleware for cross-origin requests (needed when frontend is served from a different domain)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Restrict to specific domains in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add session middleware
+app.add_middleware(SessionMiddleware, secret_key=auth_secrets["session_secret"])
+
 # Mount static files
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Templates
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-import json
+
+# --- Auth Dependencies ---
+
+async def require_api_key(x_api_key: str = Header(None)):
+    """Dependency: require valid API key for client agent endpoints."""
+    if not x_api_key or not verify_api_key(x_api_key, auth_secrets["api_key"]):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+async def require_session(request: Request):
+    """Dependency: require authenticated session for dashboard endpoints."""
+    if not request.session.get("authenticated"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+async def require_api_key_or_session(request: Request, x_api_key: str = Header(None)):
+    """Dependency: accept either API key or authenticated session."""
+    if x_api_key and verify_api_key(x_api_key, auth_secrets["api_key"]):
+        return
+    if request.session.get("authenticated"):
+        return
+    raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+# --- Login / Logout Endpoints ---
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    if (username == auth_secrets["admin_username"]
+            and verify_password(password, auth_secrets["admin_password_hash"], auth_secrets["admin_salt"])):
+        request.session["authenticated"] = True
+        request.session["username"] = username
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password"})
+
+
+@app.post("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+
 
 # --- Pydantic Models for API ---
 class LogBatch(BaseModel):
@@ -74,8 +158,8 @@ def _merge_deployments(server_deployments: List[Dict[str, Any]], client_deployme
 
 # --- API Endpoints ---
 
-@app.post("/api/heartbeat")
-async def heartbeat(hb: Heartbeat):
+@app.post("/api/heartbeat", dependencies=[Depends(require_api_key)])
+async def heartbeat(hb: Heartbeat, request: Request):
     # Register or update status
     existing = await db.get_agent(hb.node_id)
     
@@ -111,13 +195,14 @@ async def heartbeat(hb: Heartbeat):
         # 2. Auto-Registration for Unknown Agents
         print(f"Auto-registering new agent: {hb.node_id} ({hb.ip})")
         # Use client-side config as the initial source of truth when available
+        server_url = get_server_public_url(request)
         pending_config = hb.config or {
             "node_id": hb.node_id,
-            "server_url": "http://localhost:8000",
+            "server_url": server_url,
             "deployments": [],
         }
         pending_config["node_id"] = hb.node_id
-        pending_config.setdefault("server_url", "http://localhost:8000")
+        pending_config.setdefault("server_url", server_url)
         pending_config.setdefault("deployments", [])
         pending_config.setdefault("original_id", hb.node_id)
         await db.register_agent(
@@ -144,7 +229,7 @@ async def heartbeat(hb: Heartbeat):
 
             client_config = dict(hb.config)
             client_config["node_id"] = hb.node_id
-            client_config.setdefault("server_url", server_config.get("server_url") or "http://localhost:8000")
+            client_config.setdefault("server_url", server_config.get("server_url") or get_server_public_url(request))
             client_config.setdefault("original_id", server_config.get("original_id") or hb.node_id)
 
             server_deployments = server_config.get("deployments") or []
@@ -161,8 +246,8 @@ async def heartbeat(hb: Heartbeat):
     
     return {"status": "ok", "command": command}
 
-@app.get("/api/config/{node_id}")
-async def get_config(node_id: str):
+@app.get("/api/config/{node_id}", dependencies=[Depends(require_api_key_or_session)])
+async def get_config(node_id: str, request: Request):
     agent = await db.get_agent(node_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found. please wait for auto-registration.")
@@ -177,17 +262,32 @@ async def get_config(node_id: str):
         # Fallback to empty or minimal config
         response_data = {
             "node_id": node_id,
-            "server_url": "http://localhost:8000", 
+            "server_url": get_server_public_url(request), 
             "deployments": []
         }
         
     response_data['name'] = agent['name'] # Ensure we return the authoritative name
     return JSONResponse(content=response_data)
 
-@app.post("/api/logs")
+@app.post("/api/logs", dependencies=[Depends(require_api_key)])
 async def upload_logs(batch: LogBatch):
     count = await db.insert_logs(batch.node_id, batch.logs)
     return {"status": "received", "count": count}
+
+
+@app.get("/api/server_info")
+async def server_info(request: Request):
+    """Return server configuration info for the frontend (e.g., Kibana URL)."""
+    kibana_url = KIBANA_URL
+    if not kibana_url:
+        # Auto-detect from current request host
+        host = request.headers.get("host", "localhost")
+        hostname = host.split(":")[0]  # Strip port
+        kibana_url = f"http://{hostname}:5601"
+    return {
+        "kibana_url": kibana_url,
+        "server_url": get_server_public_url(request),
+    }
 
 # --- Profile Endpoints ---
  
@@ -197,7 +297,7 @@ PROFILES_DIR = os.path.join(os.path.dirname(BASE_DIR), "client", "profiles")
 
 import aiofiles
 
-@app.get("/api/profiles")
+@app.get("/api/profiles", dependencies=[Depends(require_session)])
 async def list_profiles():
     """List available profile files"""
     if not os.path.exists(PROFILES_DIR):
@@ -230,7 +330,7 @@ async def list_profiles():
         
     return profiles
 
-@app.get("/api/profiles/{name}")
+@app.get("/api/profiles/{name}", dependencies=[Depends(require_session)])
 async def get_profile(name: str):
     """Get full content of a profile"""
     # Security: Sanitize path to prevent directory traversal
@@ -261,7 +361,7 @@ UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 PACKAGE_LIBRARY_DIR = os.path.join(UPLOADS_DIR, "library")
 
 
-@app.get("/api/deployment_templates")
+@app.get("/api/deployment_templates", dependencies=[Depends(require_session)])
 async def list_deployment_templates():
     if not os.path.exists(DEPLOYMENT_TEMPLATES_DIR):
         return []
@@ -450,7 +550,7 @@ def _load_package_from_library(package_id: str):
     }
 
 
-@app.post("/api/import_package_zip")
+@app.post("/api/import_package_zip", dependencies=[Depends(require_session)])
 async def import_package_zip(archive: UploadFile = File(...)):
     filename = archive.filename or "package.zip"
     if not filename.lower().endswith(".zip"):
@@ -494,12 +594,12 @@ async def import_package_zip(archive: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/api/package_library")
+@app.get("/api/package_library", dependencies=[Depends(require_session)])
 async def list_package_library():
     return _list_package_library()
 
 
-@app.get("/api/package_library/{package_id}")
+@app.get("/api/package_library/{package_id}", dependencies=[Depends(require_session)])
 async def get_package_library_item(package_id: str):
     return _load_package_from_library(package_id)
 
@@ -508,18 +608,22 @@ async def get_package_library_item(package_id: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/login", status_code=303)
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/config/{node_id}", response_class=HTMLResponse)
 async def config_page(request: Request, node_id: str):
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/login", status_code=303)
     return templates.TemplateResponse("config.html", {"request": request, "node_id": node_id})
 
-@app.get("/api/agents")
+@app.get("/api/agents", dependencies=[Depends(require_session)])
 async def get_agents():
     agents = await db.get_all_agents()
     return agents
 
-@app.post("/api/agents")
+@app.post("/api/agents", dependencies=[Depends(require_session)])
 async def add_agent(
     node_id: str = Form(...), 
     name: str = Form(...),
@@ -531,25 +635,25 @@ async def add_agent(
     except json.JSONDecodeError:
         config_dict = {
             "node_id": node_id,
-            "server_url": "http://localhost:8000",
+            "server_url": get_server_public_url(),
             "deployments": []
         }
         
     await db.register_agent(node_id, name=name, ip=ip, config=config_dict)
     return {"status": "added"}
 
-@app.post("/api/agents/{node_id}/toggle")
+@app.post("/api/agents/{node_id}/toggle", dependencies=[Depends(require_session)])
 async def toggle_agent(node_id: str, payload: Dict[str, bool]):
     is_active = payload.get("is_active", True)
     await db.toggle_agent_active(node_id, is_active)
     return {"status": "toggled", "is_active": is_active}
 
-@app.delete("/api/agents/{node_id}")
+@app.delete("/api/agents/{node_id}", dependencies=[Depends(require_session)])
 async def delete_agent(node_id: str):
     await db.delete_agent(node_id)
     return {"status": "deleted"}
 
-@app.post("/api/agents/{node_id}/reset")
+@app.post("/api/agents/{node_id}/reset", dependencies=[Depends(require_session)])
 async def reset_agent(node_id: str):
     """Factory reset: completely forget the agent so it can re-register as new"""
     try:
@@ -566,7 +670,7 @@ async def reset_agent(node_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/recent_logs")
+@app.get("/api/recent_logs", dependencies=[Depends(require_session)])
 async def recent_logs():
     logs = await db.get_recent_logs(limit=50)
     return logs
@@ -623,7 +727,7 @@ def validate_config_proxy_settings(config: Dict[str, Any]) -> tuple[bool, str]:
     return True, ""
 
 
-@app.post("/api/update_agent_config")
+@app.post("/api/update_agent_config", dependencies=[Depends(require_session)])
 async def update_agent_config(payload: Dict[str, Any]):
     current_node_id = payload.get("node_id")
     new_node_id = payload.get("new_node_id")
@@ -657,7 +761,7 @@ async def update_agent_config(payload: Dict[str, Any]):
     
     return {"status": "updated", "new_node_id": target_node_id}
 
-@app.post("/api/admin/sync_elk")
+@app.post("/api/admin/sync_elk", dependencies=[Depends(require_session)])
 async def sync_elk():
     try:
         import importlib
