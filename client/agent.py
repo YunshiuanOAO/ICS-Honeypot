@@ -484,7 +484,10 @@ class NodeAgent:
             if not new_config:
                 return
 
-            new_config["deployments"] = self.deployment_manager.merge_local_deployments(new_config.get("deployments", []))
+            new_config["deployments"] = self.deployment_manager.merge_local_deployments(
+                new_config.get("deployments", []),
+                current_deployments=self.config.get("deployments", [])
+            )
 
             current_deployments = json.dumps(self.config.get("deployments", []), sort_keys=True)
             incoming_deployments = json.dumps(new_config.get("deployments", []), sort_keys=True)

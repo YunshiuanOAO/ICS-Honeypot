@@ -3,13 +3,11 @@ const API_BASE = "/api";
 
 // State
 let agentConfig = null;
-let DEPLOYMENT_TEMPLATES = [];
 let PACKAGE_LIBRARY = [];
 let currentView = 'agent-settings'; // 'agent-settings', 'deployment-{id}', 'file-{deploymentId}-{fileIndex}'
 
 async function init() {
     Toast.init();
-    await loadDeploymentTemplates();
     await loadPackageLibrary();
     await loadConfig();
 }
@@ -38,16 +36,6 @@ function escapeHtml(text) {
 }
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
-
-async function loadDeploymentTemplates() {
-    try {
-        DEPLOYMENT_TEMPLATES = await fetch(`${API_BASE}/deployment_templates`).then(r => r.json());
-        renderTemplateDropdown();
-    } catch (e) {
-        console.error("Failed to load templates", e);
-        DEPLOYMENT_TEMPLATES = [];
-    }
-}
 
 async function loadPackageLibrary() {
     try {
@@ -81,7 +69,8 @@ async function loadConfig() {
                 proxy: d.proxy ? clone(d.proxy) : undefined,
                 files: Array.isArray(d.files) ? clone(d.files) : [],
                 library_package_id: d.library_package_id || "",
-                library_package_name: d.library_package_name || ""
+                library_package_name: d.library_package_name || "",
+                files_updated_at: d.files_updated_at || 0
             })) : []
         };
         
@@ -93,49 +82,16 @@ async function loadConfig() {
     }
 }
 
-function renderTemplateDropdown() {
-    const list = document.getElementById('template-dropdown-list');
-    const templates = DEPLOYMENT_TEMPLATES.length ? [...DEPLOYMENT_TEMPLATES] : [{ id: "custom", name: "Custom Honeypot" }];
-    
-    // Add Blank Template option
-    templates.push({ id: "blank", name: "Blank Template" });
-    
-    list.innerHTML = templates.map(t => `
-        <div class="tree-item" onclick="addDeployment('${t.id}')">
-            <span>${escapeHtml(t.name)}</span>
-        </div>
-    `).join('');
-}
-
-function addDeployment(templateId) {
-    document.getElementById('template-dropdown').classList.add('hidden');
-    
-    let template;
-    if (templateId === 'blank') {
-        template = {
-            id: "blank", name: "Blank Template", source_dir: "blank-honeypot",
-            files: []
-        };
-    } else {
-        template = DEPLOYMENT_TEMPLATES.find(t => t.id === templateId) || {
-            id: "custom", name: "Custom Honeypot", source_dir: "custom-honeypot",
-            files: [
-                { path: "Dockerfile", content: "FROM alpine:3.20\nCMD [\"sh\", \"-c\", \"sleep infinity\"]\n" },
-                { path: "docker-compose.yml", content: "services:\n  honeypot:\n    build: .\n    restart: unless-stopped\n" }
-            ]
-        };
-    }
-    
+function addDeployment() {
     const newId = `deployment-${Date.now()}`;
     agentConfig.deployments.push({
         id: newId,
-        name: template.name,
-        template: template.id,
+        name: "New Deployment",
+        template: "custom",
         enabled: true,
-        source_dir: template.source_dir || `${template.id}-honeypot`,
-        log_paths: clone(template.log_paths || []),
-        proxy: clone(template.proxy || undefined),
-        files: clone(template.files || [])
+        source_dir: newId,
+        log_paths: [],
+        files: []
     });
     
     renderSidebar();
@@ -308,6 +264,7 @@ function renderPackageLibrary() {
             <span>${escapeHtml(pkg.name || pkg.id)}</span>
             <div class="tree-actions" style="opacity:1;">
                 <button onclick="event.stopPropagation(); addDeploymentFromLibrary('${pkg.id}')" title="Use Package"><i data-lucide="plus"></i></button>
+                <button onclick="deleteLibraryPackage('${pkg.id}', event)" title="Delete Package"><i data-lucide="trash-2"></i></button>
             </div>
         </div>
     `).join('');
@@ -354,6 +311,26 @@ async function previewLibraryPackage(packageId) {
     } catch (error) {
         console.error(error);
         Toast.error(error.message || 'Failed to preview package');
+    }
+}
+
+async function deleteLibraryPackage(packageId, event) {
+    if (event) event.stopPropagation();
+    if (!confirm("Are you sure you want to delete this package from the library?")) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/package_library/${packageId}`, {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to delete package');
+        }
+        Toast.success("Package deleted from library");
+        await loadPackageLibrary();
+    } catch (error) {
+        console.error(error);
+        Toast.error(error.message || 'Failed to delete package');
     }
 }
 
@@ -423,10 +400,6 @@ function renderMainEditor() {
                     <div class="form-group">
                         <label>Service Name (ID)</label>
                         <input type="text" value="${escapeHtml(deployment.name)}" onchange="updateDeploymentName('${id}', this.value)">
-                    </div>
-                    <div class="form-group">
-                        <label>Base Template</label>
-                        <input type="text" value="${escapeHtml(deployment.template)}" disabled class="bg-muted">
                     </div>
                 </div>
                 <div class="form-row">
@@ -642,6 +615,12 @@ async function saveConfig() {
     
     // Original Node ID used for the endpoint to know who we are updating
     const originalNodeId = NODE_ID; 
+    
+    // Mark each deployment with a timestamp so the client knows to re-sync files
+    const now = Date.now();
+    for (const d of agentConfig.deployments) {
+        d.files_updated_at = now;
+    }
     
     try {
         const response = await fetch(`${API_BASE}/update_agent_config`, {

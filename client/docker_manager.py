@@ -11,6 +11,7 @@ class DockerDeploymentManager:
         self.client_dir = client_dir
         self.runtime_root = os.path.join(client_dir, "runtime")
         self.status = {}
+        self._pending_rematerialize = set()
         self.set_node_id(node_id)
         os.makedirs(self.runtime_root, exist_ok=True)
 
@@ -230,16 +231,30 @@ class DockerDeploymentManager:
         with open(override_path, "w", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
 
-    def merge_local_deployments(self, deployments):
+    def merge_local_deployments(self, deployments, current_deployments=None):
+        current_by_id = {}
+        if current_deployments:
+            for d in current_deployments:
+                if d.get("id"):
+                    current_by_id[d["id"]] = d
+
         merged = []
         for deployment in deployments:
             deployment_copy = deepcopy(deployment)
-            discovered_source_dir = self._discover_source_dir(deployment_copy["id"])
+            deployment_id = deployment_copy.get("id")
+            discovered_source_dir = self._discover_source_dir(deployment_id)
             if discovered_source_dir:
-                deployment_copy["source_dir"] = discovered_source_dir
-                source_root = os.path.join(self.node_runtime_dir, deployment_copy["id"], "package", discovered_source_dir)
-                deployment_copy["files"] = self._read_local_files(source_root)
-                deployment_copy["client_authoritative"] = True
+                server_updated = deployment_copy.get("files_updated_at")
+                current = current_by_id.get(deployment_id)
+                local_updated = current.get("files_updated_at") if current else None
+
+                if server_updated and server_updated != local_updated:
+                    self._pending_rematerialize.add(deployment_id)
+                else:
+                    deployment_copy["source_dir"] = discovered_source_dir
+                    source_root = os.path.join(self.node_runtime_dir, deployment_id, "package", discovered_source_dir)
+                    deployment_copy["files"] = self._read_local_files(source_root)
+                    deployment_copy["client_authoritative"] = True
             merged.append(deployment_copy)
         return merged
 
@@ -393,7 +408,18 @@ class DockerDeploymentManager:
         os.makedirs(self._package_root(deployment), exist_ok=True)
         os.makedirs(self._data_root(deployment), exist_ok=True)
         os.makedirs(self._logs_root(deployment), exist_ok=True)
+
+        force_write = deployment["id"] in self._pending_rematerialize
         source_exists = os.path.isdir(source_root) and any(os.scandir(source_root))
+
+        if force_write and source_exists:
+            package_root = self._package_root(deployment)
+            if os.path.isdir(package_root):
+                shutil.rmtree(package_root)
+            os.makedirs(package_root, exist_ok=True)
+            source_exists = False
+            self._pending_rematerialize.discard(deployment["id"])
+
         if not source_exists:
             if os.path.exists(source_root):
                 shutil.rmtree(source_root)

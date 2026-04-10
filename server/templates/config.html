@@ -253,18 +253,10 @@
             </div>
         </div>
         <div class="header-actions">
-            <!-- Add Template Button Dropdown -->
-            <button class="btn btn-secondary" onclick="document.getElementById('template-dropdown').classList.toggle('hidden')">
+            <button class="btn btn-secondary" onclick="addDeployment()">
                 <i data-lucide="plus"></i>
                 <span>Add Deployment</span>
             </button>
-            <div id="template-dropdown" class="hidden" style="position: absolute; top: 60px; right: 150px; background: var(--bg-card); backdrop-filter: var(--glass-blur); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem; z-index: 100; min-width: 200px; box-shadow: var(--shadow-lg);">
-                <div class="dropdown-header" style="padding: 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">Select Template</div>
-                <div id="template-dropdown-list">
-                    <!-- Populated by JS -->
-                </div>
-            </div>
-
             <button class="btn btn-primary" onclick="saveConfig()">
                 <i data-lucide="save"></i>
                 <span>Save Changes</span>

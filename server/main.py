@@ -191,7 +191,12 @@ def _merge_deployments(server_deployments: List[Dict[str, Any]], client_deployme
     for deployment in server_deployments or []:
         deployment_id = deployment.get("id")
         if deployment_id and deployment_id in client_by_id:
-            merged.append(client_by_id[deployment_id])
+            server_updated = deployment.get("files_updated_at")
+            client_updated = client_by_id[deployment_id].get("files_updated_at")
+            if server_updated and (not client_updated or server_updated > client_updated):
+                merged.append(deployment)
+            else:
+                merged.append(client_by_id[deployment_id])
             seen.add(deployment_id)
         else:
             merged.append(deployment)
@@ -500,29 +505,8 @@ async def get_profile(name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-DEPLOYMENT_TEMPLATES_DIR = os.path.join(BASE_DIR, "deployment_templates")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 PACKAGE_LIBRARY_DIR = os.path.join(UPLOADS_DIR, "library")
-
-
-@app.get("/api/deployment_templates", dependencies=[Depends(require_session)])
-async def list_deployment_templates():
-    if not os.path.exists(DEPLOYMENT_TEMPLATES_DIR):
-        return []
-
-    templates_data = []
-    for filename in sorted(os.listdir(DEPLOYMENT_TEMPLATES_DIR)):
-        if not filename.endswith(".json"):
-            continue
-        file_path = os.path.join(DEPLOYMENT_TEMPLATES_DIR, filename)
-        try:
-            async with aiofiles.open(file_path, 'r') as handle:
-                content = await handle.read()
-                templates_data.append(json.loads(content))
-        except Exception:
-            continue
-
-    return templates_data
 
 
 def _safe_extract_zip(archive_path: str, extract_dir: str):
@@ -746,6 +730,24 @@ async def list_package_library():
 @app.get("/api/package_library/{package_id}", dependencies=[Depends(require_session)])
 async def get_package_library_item(package_id: str):
     return _load_package_from_library(package_id)
+
+
+@app.delete("/api/package_library/{package_id}", dependencies=[Depends(require_session)])
+async def delete_package_library_item(package_id: str):
+    safe_package_id = os.path.basename(package_id)
+    if not safe_package_id or safe_package_id != package_id or ".." in package_id:
+        raise HTTPException(status_code=400, detail="Invalid package ID")
+
+    package_root = os.path.join(PACKAGE_LIBRARY_DIR, safe_package_id)
+    resolved_path = os.path.realpath(package_root)
+    if not resolved_path.startswith(os.path.realpath(PACKAGE_LIBRARY_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid package ID")
+
+    if not os.path.exists(package_root):
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    shutil.rmtree(package_root)
+    return {"status": "deleted"}
 
 
 # --- Web UI Endpoints ---

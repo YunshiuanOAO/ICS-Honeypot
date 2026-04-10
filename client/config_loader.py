@@ -86,8 +86,6 @@ class ConfigLoader:
             self._normalize_file(item, normalized["id"], idx)
             for idx, item in enumerate(files)
         ]
-        if not normalized["files"]:
-            normalized["files"] = self._default_files(deployment_type)
 
         return normalized
 
