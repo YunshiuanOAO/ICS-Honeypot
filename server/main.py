@@ -95,7 +95,7 @@ async def require_api_key_or_session(request: Request, x_api_key: str = Header(N
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse(request=request, name="login.html", context={"request": request, "error": None})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -105,7 +105,7 @@ async def login_submit(request: Request, username: str = Form(...), password: st
         request.session["authenticated"] = True
         request.session["username"] = username
         return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password"})
+    return templates.TemplateResponse(request=request, name="login.html", context={"request": request, "error": "Invalid username or password"})
 
 
 @app.post("/logout")
@@ -610,13 +610,13 @@ async def get_package_library_item(package_id: str):
 async def dashboard(request: Request):
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/login", status_code=303)
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html", context={"request": request})
 
 @app.get("/config/{node_id}", response_class=HTMLResponse)
 async def config_page(request: Request, node_id: str):
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/login", status_code=303)
-    return templates.TemplateResponse("config.html", {"request": request, "node_id": node_id})
+    return templates.TemplateResponse(request=request, name="config.html", context={"request": request, "node_id": node_id})
 
 @app.get("/api/agents", dependencies=[Depends(require_session)])
 async def get_agents():
