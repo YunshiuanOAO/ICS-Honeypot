@@ -44,6 +44,15 @@ class ContainerLogCollector:
             if not deployment.get("enabled", True):
                 continue
 
+            # Skip container-side log files when a proxy is configured for this
+            # deployment. The proxy already captures the real attacker IP via
+            # its listening socket; container-internal logs see the Docker
+            # bridge gateway (e.g. 172.17.0.1) instead of the real client,
+            # which would pollute the attack map with private IPs.
+            proxy_cfg = deployment.get("proxy") or {}
+            if proxy_cfg.get("enabled"):
+                continue
+
             deployment_root = os.path.join(self.runtime_root, deployment["id"])
             source_dir = deployment.get("source_dir") or deployment["id"]
             package_root = os.path.join(deployment_root, "package", source_dir)
