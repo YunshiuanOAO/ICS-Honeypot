@@ -1,6 +1,5 @@
 const API_BASE = "/api";
 
-let DEPLOYMENT_TEMPLATES = [];
 let editDeployments = [];
 let isLogPaused = false;
 let attackMapInstance = null;
@@ -137,45 +136,8 @@ function showSection(sectionId) {
     lucide.createIcons();
 }
 
-async function loadDeploymentTemplates() {
-    try {
-        DEPLOYMENT_TEMPLATES = await fetch(`${API_BASE}/deployment_templates`).then((response) => response.json());
-    } catch (_error) {
-        DEPLOYMENT_TEMPLATES = [];
-    }
-}
-
-function getTemplate(templateId) {
-    return DEPLOYMENT_TEMPLATES.find((item) => item.id === templateId);
-}
-
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
-}
-
-function defaultDeploymentFromTemplate(templateId) {
-    const template = getTemplate(templateId) || {
-        id: "custom",
-        name: "Custom Honeypot",
-        description: "Custom Docker honeypot package",
-        source_dir: "custom-honeypot",
-        log_paths: ["logs/events.log"],
-        files: [
-            { path: "Dockerfile", content: "FROM alpine:3.20\nCMD [\"sh\", \"-c\", \"sleep infinity\"]\n" },
-            { path: "docker-compose.yml", content: "services:\n  honeypot:\n    build: .\n    restart: unless-stopped\n" }
-        ]
-    };
-
-    return {
-        id: `deployment-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        name: template.name,
-        type: template.id,
-        template: template.id,
-        enabled: true,
-        source_dir: template.source_dir || `${template.id}-honeypot`,
-        log_paths: clone(template.log_paths || []),
-        files: clone(template.files || [])
-    };
 }
 
 function normalizeConfigForUi(config) {
@@ -540,7 +502,6 @@ Object.assign(window, {
 document.addEventListener("DOMContentLoaded", async () => {
     applyTheme(currentTheme);
     Toast.init();
-    await loadDeploymentTemplates();
     await refreshData();
     setInterval(() => {
         const dashboardVisible = !document.getElementById("dashboard").classList.contains("hidden");
