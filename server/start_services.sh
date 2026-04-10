@@ -81,6 +81,12 @@ install_system_deps() {
             info "Installing Python 3 via Homebrew..."
             brew install python3
         fi
+        # Install uv on macOS
+        if ! command -v uv &> /dev/null; then
+            info "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
         ok "macOS dependencies OK."
         return
     fi
@@ -100,26 +106,35 @@ install_system_deps() {
         $SUDO apt-get update -qq
         $SUDO apt-get install -y -qq \
             python3 \
-            python3-pip \
-            python3-venv \
             docker.io \
             docker-compose-plugin \
             curl \
             lsof \
             git \
             > /dev/null 2>&1
+        # Install uv
+        if ! command -v uv &> /dev/null; then
+            info "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
         ok "APT packages installed."
 
     elif [ "$OS_ID" == "amzn" ]; then
         info "Installing system packages (yum/dnf)..."
         $SUDO dnf install -y \
             python3 \
-            python3-pip \
             docker \
             curl \
             lsof \
             git \
             > /dev/null 2>&1
+        # Install uv
+        if ! command -v uv &> /dev/null; then
+            info "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
         # docker-compose as plugin
         if ! docker compose version &> /dev/null; then
             info "Installing Docker Compose plugin..."
@@ -135,16 +150,21 @@ install_system_deps() {
         info "Installing system packages (yum)..."
         $SUDO yum install -y \
             python3 \
-            python3-pip \
             docker \
             curl \
             lsof \
             git \
             > /dev/null 2>&1
+        # Install uv
+        if ! command -v uv &> /dev/null; then
+            info "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
         ok "YUM packages installed."
     else
         warn "Unknown Linux distro: $OS_ID. Skipping system package install."
-        warn "Please manually install: python3, pip, docker, docker-compose, lsof, curl"
+        warn "Please manually install: python3, docker, docker-compose, lsof, curl, uv"
     fi
 
     # Ensure Docker service is running
@@ -172,8 +192,10 @@ install_system_deps
 info "Verifying core tools..."
 command -v docker &> /dev/null || fail "Docker is not installed."
 command -v python3 &> /dev/null || fail "Python 3 is not installed."
+command -v uv &> /dev/null || fail "uv is not installed. Run: curl -LsSf https://astral.sh/uv/install.sh | sh"
 (docker compose version &> /dev/null || docker-compose --version &> /dev/null) || fail "Docker Compose is not installed."
 ok "docker: $(docker --version | head -1)"
+ok "uv:     $(uv --version)"
 ok "python3: $(python3 --version)"
 
 # ─────────────────────────────────────────
@@ -255,26 +277,23 @@ EOF
 init_env_files
 
 # ─────────────────────────────────────────
-# 9. Python Virtual Environment & Dependencies
+# 9. Python Virtual Environment & Dependencies (uv)
 # ─────────────────────────────────────────
-VENV_DIR="$REPO_ROOT/venv"
+VENV_DIR="$REPO_ROOT/.venv"
 
 if [ ! -d "$VENV_DIR" ]; then
-    info "Creating Python virtual environment at $VENV_DIR..."
-    python3 -m venv "$VENV_DIR" || fail "Failed to create virtual environment."
-    ok "Virtual environment created."
+    info "Creating Python virtual environment with uv..."
+    uv venv "$VENV_DIR" || fail "Failed to create virtual environment."
+    ok "Virtual environment created at $VENV_DIR"
 fi
 
 info "Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
 
-# Upgrade pip
-pip install --upgrade pip --quiet 2>/dev/null
-
 REQ_FILE="$REPO_ROOT/requirements.txt"
 if [ -f "$REQ_FILE" ]; then
-    info "Installing Python dependencies..."
-    pip install -r "$REQ_FILE" --quiet
+    info "Installing Python dependencies with uv..."
+    uv pip install -r "$REQ_FILE"
     ok "Python dependencies installed."
 else
     warn "requirements.txt not found at $REQ_FILE."

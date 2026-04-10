@@ -12,6 +12,9 @@ env/
 venv/
 .venv/
 
+# uv
+uv.lock
+
 # Packaging / build
 build/
 dist/
