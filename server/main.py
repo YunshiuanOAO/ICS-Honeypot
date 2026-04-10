@@ -128,6 +128,53 @@ class Heartbeat(BaseModel):
     deployment_status: Optional[Dict[str, Any]] = None
 
 
+_PRIVATE_IP_PREFIXES = (
+    "10.", "127.", "169.254.", "192.168.",
+    "172.16.", "172.17.", "172.18.", "172.19.",
+    "172.20.", "172.21.", "172.22.", "172.23.",
+    "172.24.", "172.25.", "172.26.", "172.27.",
+    "172.28.", "172.29.", "172.30.", "172.31.",
+)
+
+
+def _is_private_ip(ip: str) -> bool:
+    if not ip:
+        return True
+    return ip.startswith(_PRIVATE_IP_PREFIXES) or ip == "::1" or ip.startswith("fc") or ip.startswith("fd")
+
+
+def _get_client_ip(request: Request) -> Optional[str]:
+    """Extract the real client IP from the request.
+
+    Honors standard reverse-proxy headers (X-Forwarded-For, X-Real-IP) so
+    agents behind NAT / behind a reverse proxy report their public IP rather
+    than an internal VM address (e.g. GCP 10.x.x.x).
+    """
+    # X-Forwarded-For: "client, proxy1, proxy2" — the first non-private entry
+    # is the original client.
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        for candidate in (part.strip() for part in xff.split(",")):
+            if candidate and not _is_private_ip(candidate):
+                return candidate
+        # All entries were private — fall through to other sources, but keep
+        # the first as a last-resort value.
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+
+    # X-Real-IP: single value set by nginx/traefik/caddy reverse proxies.
+    xri = request.headers.get("x-real-ip")
+    if xri:
+        return xri.strip()
+
+    # Direct socket peer (no reverse proxy in front).
+    if request.client and request.client.host:
+        return request.client.host
+
+    return None
+
+
 def _merge_deployments(server_deployments: List[Dict[str, Any]], client_deployments: List[Dict[str, Any]]):
     merged = []
     client_by_id = {}
@@ -160,9 +207,22 @@ def _merge_deployments(server_deployments: List[Dict[str, Any]], client_deployme
 
 @app.post("/api/heartbeat", dependencies=[Depends(require_api_key)])
 async def heartbeat(hb: Heartbeat, request: Request):
+    # Prefer the real client IP detected from the HTTP connection. Agents in
+    # cloud VMs (GCP, AWS, etc.) often self-report their internal VPC address
+    # because their OS-level interface has no public IP bound. Detecting the
+    # IP server-side gives us the actual public IP attackers would reach,
+    # which is what the attack map should display.
+    detected_ip = _get_client_ip(request)
+    if detected_ip and not _is_private_ip(detected_ip):
+        hb.ip = detected_ip
+    elif detected_ip and _is_private_ip(hb.ip):
+        # Both detected and client-reported are private — at least keep the
+        # one closest to the real edge (detected from the connection).
+        hb.ip = detected_ip
+
     # Register or update status
     existing = await db.get_agent(hb.node_id)
-    
+
     command = "start" # Default command
     response_extras = {}
 
