@@ -12,6 +12,9 @@ import shutil
 import uuid
 import zipfile
 import json
+import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import datetime
 from database import ServerDB
@@ -348,6 +351,87 @@ async def server_info(request: Request):
         "kibana_url": kibana_url,
         "server_url": get_server_public_url(request),
     }
+
+
+# --- GeoIP Proxy ---
+# Frontend used to call https://ip-api.com/json/... directly, but that endpoint
+# only supports HTTP on the free tier. When the dashboard is loaded over HTTPS
+# the browser blocks the mixed-content fetch and the map silently falls back to
+# lat=0, lon=0. Proxy through the server instead and cache responses.
+_GEOIP_CACHE: Dict[str, Dict[str, Any]] = {}
+_GEOIP_TTL_SECONDS = 24 * 60 * 60  # 24h
+
+
+@app.get("/api/geoip/{ip}")
+async def geoip_lookup(ip: str):
+    """Server-side GeoIP proxy with TTL cache.
+
+    Avoids mixed-content / CORS problems when the frontend is served over HTTPS.
+    Returns { ip, lat, lon, country, city, status }.
+    """
+    ip = (ip or "").strip()
+    if not ip or _is_private_ip(ip):
+        return {
+            "ip": ip,
+            "lat": 0,
+            "lon": 0,
+            "country": "Private Network",
+            "city": "Local",
+            "status": "private",
+        }
+
+    now = time.time()
+    cached = _GEOIP_CACHE.get(ip)
+    if cached and (now - cached.get("_ts", 0)) < _GEOIP_TTL_SECONDS:
+        return {k: v for k, v in cached.items() if k != "_ts"}
+
+    # Try ipwho.is first (free, HTTPS, no key, CORS-friendly).
+    providers = [
+        ("ipwho", f"https://ipwho.is/{ip}?fields=success,country,city,latitude,longitude"),
+        ("ip-api", f"http://ip-api.com/json/{ip}?fields=status,country,city,lat,lon"),
+    ]
+    result: Optional[Dict[str, Any]] = None
+    for name, url in providers:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "honeypot-server/1.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, OSError):
+            continue
+
+        if name == "ipwho" and data.get("success"):
+            result = {
+                "ip": ip,
+                "lat": data.get("latitude") or 0,
+                "lon": data.get("longitude") or 0,
+                "country": data.get("country") or "",
+                "city": data.get("city") or "",
+                "status": "success",
+            }
+            break
+        if name == "ip-api" and data.get("status") == "success":
+            result = {
+                "ip": ip,
+                "lat": data.get("lat") or 0,
+                "lon": data.get("lon") or 0,
+                "country": data.get("country") or "",
+                "city": data.get("city") or "",
+                "status": "success",
+            }
+            break
+
+    if result is None:
+        result = {
+            "ip": ip,
+            "lat": 0,
+            "lon": 0,
+            "country": "Unknown",
+            "city": "",
+            "status": "fail",
+        }
+
+    _GEOIP_CACHE[ip] = {**result, "_ts": now}
+    return result
 
 # --- Profile Endpoints ---
  

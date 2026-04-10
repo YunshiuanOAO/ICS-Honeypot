@@ -16,13 +16,24 @@ async function resolveGeoIP(ip) {
     }
     if (geoCache.has(ip)) return geoCache.get(ip);
 
+    // Proxy through our own server. ip-api.com's free tier is HTTP-only, so
+    // calling it directly from an HTTPS dashboard gets blocked as mixed
+    // content and silently drops the lookup to (0, 0).
     try {
-        const resp = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,city,lat,lon`);
-        const data = await resp.json();
-        if (data.status === "success") {
-            const result = { ip, lat: data.lat, lon: data.lon, country: data.country, city: data.city || "" };
-            geoCache.set(ip, result);
-            return result;
+        const resp = await fetch(`/api/geoip/${encodeURIComponent(ip)}`);
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.status === "success") {
+                const result = {
+                    ip,
+                    lat: Number(data.lat) || 0,
+                    lon: Number(data.lon) || 0,
+                    country: data.country || "",
+                    city: data.city || "",
+                };
+                geoCache.set(ip, result);
+                return result;
+            }
         }
     } catch (_e) { /* ignore */ }
 
