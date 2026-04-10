@@ -62,7 +62,24 @@ install_deps() {
         elif [ "$OS_ID" == "ubuntu" ] || [ "$OS_ID" == "debian" ]; then
             info "Installing Docker..."
             $SUDO apt-get update -qq
-            $SUDO apt-get install -y -qq docker.io docker-compose-plugin > /dev/null 2>&1
+            $SUDO apt-get install -y -qq ca-certificates curl gnupg > /dev/null 2>&1
+            
+            if apt-cache show docker.io &> /dev/null; then
+                $SUDO apt-get install -y -qq docker.io docker-compose-plugin > /dev/null 2>&1
+            else
+                info "docker.io not in repos, using Docker official installer..."
+                curl -fsSL https://get.docker.com | $SUDO sh
+                
+                # Install compose plugin manually if needed
+                if ! docker compose version &> /dev/null; then
+                    info "Installing Docker Compose plugin manually..."
+                    DOCKER_CONFIG=${DOCKER_CONFIG:-/usr/local/lib/docker}
+                    $SUDO mkdir -p "$DOCKER_CONFIG/cli-plugins"
+                    $SUDO curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+                        -o "$DOCKER_CONFIG/cli-plugins/docker-compose"
+                    $SUDO chmod +x "$DOCKER_CONFIG/cli-plugins/docker-compose"
+                fi
+            fi
         elif [ "$OS_ID" == "amzn" ]; then
             info "Installing Docker..."
             $SUDO dnf install -y docker > /dev/null 2>&1

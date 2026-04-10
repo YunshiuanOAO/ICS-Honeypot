@@ -106,12 +106,39 @@ install_system_deps() {
         $SUDO apt-get update -qq
         $SUDO apt-get install -y -qq \
             python3 \
-            docker.io \
-            docker-compose-plugin \
+            python3-venv \
             curl \
             lsof \
             git \
-            > /dev/null 2>&1
+            ca-certificates \
+            gnupg
+
+        # Install Docker — try docker.io first, fallback to official Docker repo
+        if ! command -v docker &> /dev/null; then
+            info "Installing Docker..."
+            if apt-cache show docker.io &> /dev/null; then
+                $SUDO apt-get install -y -qq docker.io
+            else
+                # Use Docker's official install script (works on all Debian/Ubuntu)
+                info "docker.io not in repos, using Docker official installer..."
+                curl -fsSL https://get.docker.com | $SUDO sh
+            fi
+        fi
+
+        # Install docker compose plugin
+        if ! docker compose version &> /dev/null; then
+            if apt-cache show docker-compose-plugin &> /dev/null; then
+                $SUDO apt-get install -y -qq docker-compose-plugin
+            else
+                info "Installing Docker Compose plugin manually..."
+                DOCKER_CONFIG=${DOCKER_CONFIG:-/usr/local/lib/docker}
+                $SUDO mkdir -p "$DOCKER_CONFIG/cli-plugins"
+                $SUDO curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+                    -o "$DOCKER_CONFIG/cli-plugins/docker-compose"
+                $SUDO chmod +x "$DOCKER_CONFIG/cli-plugins/docker-compose"
+            fi
+        fi
+
         # Install uv
         if ! command -v uv &> /dev/null; then
             info "Installing uv..."
