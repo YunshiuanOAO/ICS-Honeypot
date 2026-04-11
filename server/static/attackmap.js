@@ -515,13 +515,32 @@ class AttackMap {
             this.agentsCache = agents;
             this.honeypots = [];
 
+            const locationCounts = new Map();
+
             for (const agent of agents) {
                 if (agent.status !== "Online") continue;
                 const geo = await resolveGeoIP(agent.ip);
-                const pos = latLonToXY(geo.lat, geo.lon, this);
+                
+                let lat = geo.lat;
+                let lon = geo.lon;
+
+                // Add a small jitter if multiple agents share the same location
+                const locKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+                const count = locationCounts.get(locKey) || 0;
+                locationCounts.set(locKey, count + 1);
+
+                if (count > 0) {
+                    // Spiral offset: move each subsequent agent slightly further away in a circle
+                    const angle = count * 0.8; // radians
+                    const radius = 1.2 * Math.sqrt(count); // degrees (approx 130km at equator per 1.2deg)
+                    lat += radius * Math.sin(angle);
+                    lon += radius * Math.cos(angle);
+                }
+
+                const pos = latLonToXY(lat, lon, this);
                 this.honeypots.push({
                     x: pos.x, y: pos.y,
-                    lat: geo.lat, lon: geo.lon,
+                    lat: lat, lon: lon,
                     name: agent.name || agent.node_id,
                     ip: agent.ip,
                     agent: agent, // store full agent for tooltip
@@ -530,7 +549,7 @@ class AttackMap {
             }
 
             const hpEl = document.getElementById("attackmap-honeypots");
-            if (hpEl) hpEl.textContent = Object.keys(this.honeypots).length;
+            if (hpEl) hpEl.textContent = this.honeypots.length;
         } catch (_e) { /* ignore */ }
     }
 
@@ -546,14 +565,27 @@ class AttackMap {
                 const srcGeo = await resolveGeoIP(log.attacker_ip);
 
                 // Find the honeypot target
-                let dstGeo = DEFAULT_LOCATION;
-                const agent = this.agentsCache.find(a => a.node_id === log.node_id);
-                if (agent) {
-                    dstGeo = await resolveGeoIP(agent.ip);
+                let dstGeo = null;
+                
+                // Try to find the specific honeypot marker (which might have a jittered position)
+                const hp = this.honeypots.find(h => h.agent.node_id === log.node_id);
+                if (hp) {
+                    dstGeo = { lat: hp.lat, lon: hp.lon, ip: hp.ip, country: "", city: hp.name };
                 } else {
+                    // Fallback to resolving by IP if agent not in current markers
+                    const agent = this.agentsCache.find(a => a.node_id === log.node_id);
+                    if (agent) {
+                        const resolved = await resolveGeoIP(agent.ip);
+                        dstGeo = { ...resolved, city: agent.name || agent.node_id };
+                    }
+                }
+
+                if (!dstGeo) {
                     if (this.honeypots.length > 0) {
                         const hp = this.honeypots[0];
                         dstGeo = { lat: hp.lat, lon: hp.lon, ip: hp.ip, country: "", city: hp.name };
+                    } else {
+                        dstGeo = DEFAULT_LOCATION;
                     }
                 }
 

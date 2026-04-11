@@ -41,6 +41,12 @@ class ServerDB:
             cursor.execute('ALTER TABLE agents ADD COLUMN runtime_status_json TEXT')
         except sqlite3.OperationalError:
             pass
+
+        # Migration: Add whitelist_json if it doesn't exist
+        try:
+            cursor.execute('ALTER TABLE agents ADD COLUMN whitelist_json TEXT')
+        except sqlite3.OperationalError:
+            pass
         
         # LOGS Table
         cursor.execute('''
@@ -55,7 +61,23 @@ class ServerDB:
                 metadata TEXT
             )
         ''')
-        
+
+        # WHITELIST_LOGS Table — traffic from whitelisted IPs. Kept separate
+        # so it never enters the attack-log pipeline (attack map, recent
+        # logs, ELK JSON dump), but is still queryable for audit.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS whitelist_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                node_id TEXT,
+                protocol TEXT,
+                attacker_ip TEXT,
+                request_data TEXT,
+                response_data TEXT,
+                metadata TEXT
+            )
+        ''')
+
         conn.commit()
         conn.close()
 
@@ -161,11 +183,14 @@ class ServerDB:
                     if await cursor.fetchone():
                         return False, "New Node ID already exists"
 
-                # Update agents table
+                # Update agents table (whitelist_json stays with the row)
                 await db.execute('UPDATE agents SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
                 
                 # Update logs table
                 await db.execute('UPDATE logs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+
+                # Update whitelist_logs table
+                await db.execute('UPDATE whitelist_logs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
                 
                 await db.commit()
                 return True, "Renamed successfully"
@@ -175,9 +200,8 @@ class ServerDB:
 
     async def delete_agent(self, node_id):
         async with aiosqlite.connect(self.db_path) as db:
-            # Delete all logs for this agent
             await db.execute('DELETE FROM logs WHERE node_id = ?', (node_id,))
-            # Delete the agent record
+            await db.execute('DELETE FROM whitelist_logs WHERE node_id = ?', (node_id,))
             await db.execute('DELETE FROM agents WHERE node_id = ?', (node_id,))
             await db.commit()
 
@@ -185,6 +209,25 @@ class ServerDB:
         val = 1 if is_active else 0
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('UPDATE agents SET is_active = ? WHERE node_id = ?', (val, node_id))
+            await db.commit()
+
+    # --- Per-Agent Whitelist ---
+
+    async def get_agent_whitelist(self, node_id):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute('SELECT whitelist_json FROM agents WHERE node_id = ?', (node_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    try:
+                        return json.loads(row[0])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+        return None
+
+    async def update_agent_whitelist(self, node_id, whitelist_dict):
+        whitelist_str = json.dumps(whitelist_dict, ensure_ascii=False)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('UPDATE agents SET whitelist_json = ? WHERE node_id = ?', (whitelist_str, node_id))
             await db.commit()
 
     # --- Log Management ---
@@ -322,9 +365,61 @@ class ServerDB:
             async with db.execute('SELECT * FROM logs ORDER BY id DESC LIMIT ?', (limit,)) as cursor:
                 rows = await cursor.fetchall()
         return [dict(row) for row in rows]
-    
+
     async def delete_agent_logs(self, node_id):
         """Delete all logs for a specific agent"""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('DELETE FROM logs WHERE node_id = ?', (node_id,))
+            await db.commit()
+
+    # ---------- Whitelist log methods ----------
+
+    async def insert_whitelist_logs(self, node_id, logs):
+        """Insert friendly traffic into whitelist_logs.
+
+        Mirrors insert_logs() but writes to whitelist_logs instead and
+        intentionally does NOT call _log_to_json_file() — whitelist entries
+        must not appear in the ELK ingest stream.
+        """
+        count = 0
+        async with aiosqlite.connect(self.db_path) as db:
+            for log in logs:
+                timestamp = log.get('timestamp') or datetime.now().isoformat()
+                attacker_ip = log.get('attacker_ip')
+                protocol = log.get('protocol')
+                req = log.get('request_data')
+                resp = log.get('response_data')
+                meta = log.get('metadata')
+
+                meta_dict = self._parse_metadata(meta)
+                meta_str = json.dumps(meta_dict, ensure_ascii=False) if isinstance(meta_dict, dict) else str(meta_dict)
+                if isinstance(req, (dict, list)): req = json.dumps(req)
+                if isinstance(resp, (dict, list)): resp = json.dumps(resp)
+
+                await db.execute('''
+                    INSERT INTO whitelist_logs (timestamp, node_id, protocol, attacker_ip, request_data, response_data, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (timestamp, node_id, protocol, attacker_ip, req, resp, meta_str))
+                count += 1
+
+            await db.commit()
+        return count
+
+    async def get_recent_whitelist_logs(self, limit=100, node_id=None):
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if node_id:
+                query = 'SELECT * FROM whitelist_logs WHERE node_id = ? ORDER BY id DESC LIMIT ?'
+                params = (node_id, limit)
+            else:
+                query = 'SELECT * FROM whitelist_logs ORDER BY id DESC LIMIT ?'
+                params = (limit,)
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def delete_agent_whitelist_logs(self, node_id):
+        """Delete all whitelist logs for a specific agent"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('DELETE FROM whitelist_logs WHERE node_id = ?', (node_id,))
             await db.commit()

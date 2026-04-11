@@ -12,6 +12,9 @@ set -e
 # ─────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+PID_FILE="$SCRIPT_DIR/.agent.pid"
+LOG_FILE="$SCRIPT_DIR/agent.log"
+DAEMON_MODE=false
 
 # ─────────────────────────────────────────
 # 2. Color Helpers
@@ -28,7 +31,75 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 fail()  { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # ─────────────────────────────────────────
-# 3. Detect OS
+# 3. Command Handling (stop / status / logs)
+# ─────────────────────────────────────────
+_agent_running() {
+    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+case "${1:-}" in
+    stop)
+        if _agent_running; then
+            PID=$(cat "$PID_FILE")
+            info "Stopping agent (PID $PID)..."
+            kill "$PID" 2>/dev/null || true
+            for i in $(seq 1 10); do
+                kill -0 "$PID" 2>/dev/null || break
+                sleep 1
+            done
+            kill -9 "$PID" 2>/dev/null || true
+            rm -f "$PID_FILE"
+            ok "Agent stopped."
+        else
+            warn "Agent is not running."
+            rm -f "$PID_FILE"
+        fi
+        exit 0
+        ;;
+    status)
+        if _agent_running; then
+            PID=$(cat "$PID_FILE")
+            ok "Agent is running (PID $PID)"
+        else
+            warn "Agent is not running."
+            rm -f "$PID_FILE"
+        fi
+        exit 0
+        ;;
+    logs)
+        if [ -f "$LOG_FILE" ]; then
+            tail -f "$LOG_FILE"
+        else
+            warn "No log file found at $LOG_FILE"
+        fi
+        exit 0
+        ;;
+    -d|--daemon)
+        DAEMON_MODE=true
+        ;;
+    -h|--help)
+        echo "Usage: $0 [-d|--daemon] | stop | status | logs"
+        echo ""
+        echo "  (no args)    Start in foreground"
+        echo "  -d, --daemon Start in background"
+        echo "  stop         Stop background agent"
+        echo "  status       Check if agent is running"
+        echo "  logs         Tail agent log file"
+        exit 0
+        ;;
+    "")
+        ;;
+    *)
+        fail "Unknown command: $1. Use -h for help."
+        ;;
+esac
+
+if _agent_running; then
+    fail "Agent is already running (PID $(cat "$PID_FILE")). Run '$0 stop' first."
+fi
+
+# ─────────────────────────────────────────
+# 3b. Detect OS
 # ─────────────────────────────────────────
 detect_os() {
     if [ -f /etc/os-release ]; then
@@ -243,8 +314,21 @@ echo -e "${GREEN}  APS Honeypot Client Agent              ${NC}"
 echo -e "${GREEN}==========================================${NC}"
 echo -e "  Node ID:    ${CYAN}${NODE_ID}${NC}"
 echo -e "  Server:     ${CYAN}${SERVER_URL}${NC}"
-echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop"
-echo -e "${GREEN}==========================================${NC}"
-echo ""
 
-python3 main.py
+if [ "$DAEMON_MODE" = true ]; then
+    echo -e "  Mode:       ${CYAN}Background (daemon)${NC}"
+    echo -e "  Log:        ${CYAN}${LOG_FILE}${NC}"
+    echo -e "  Stop:       ${CYAN}$0 stop${NC}"
+    echo -e "${GREEN}==========================================${NC}"
+    echo ""
+    nohup python3 main.py >> "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    ok "Agent started in background (PID $!)"
+    ok "View logs: $0 logs"
+else
+    echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop"
+    echo -e "${GREEN}==========================================${NC}"
+    echo ""
+    echo $$ > "$PID_FILE"
+    python3 main.py
+fi

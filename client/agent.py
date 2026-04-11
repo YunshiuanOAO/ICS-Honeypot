@@ -14,6 +14,7 @@ from db.database import LogDB
 from docker_manager import DockerDeploymentManager
 from log_collector import ContainerLogCollector
 from proxy.proxy_manager import ProxyManager
+from whitelist import WhitelistManager
 
 
 def _get_local_ip():
@@ -34,9 +35,9 @@ def _get_local_ip():
 
 
 class NodeAgent:
-    def __init__(self):
+    def __init__(self, config_path=None):
         self.client_dir = os.path.dirname(os.path.abspath(__file__))
-        self.config_loader = ConfigLoader()
+        self.config_loader = ConfigLoader(config_path=config_path)
         self.config = self.config_loader.load_config() or {}
         self.db = LogDB(os.path.join(self.client_dir, "client_logs.db"))
         self.deployment_manager = DockerDeploymentManager(self.client_dir, self.config.get("node_id", "node_unknown"))
@@ -45,10 +46,19 @@ class NodeAgent:
         self.server_url = self.config.get("server_url", "http://localhost:8000")
         self.node_id = self.config.get("node_id", "node_unknown")
 
+        # Whitelist: traffic from listed IPs bypasses the attack-log pipeline
+        # and is written to a separate whitelist log instead.
+        whitelist_path = os.environ.get(
+            "WHITELIST_PATH",
+            os.path.join(self.client_dir, "whitelist.json"),
+        )
+        self.whitelist = WhitelistManager(whitelist_path)
+
         # Initialize Proxy Manager for protocol-aware traffic capture
         self.proxy_manager = ProxyManager(
             log_root=os.path.join(self.deployment_manager.node_runtime_dir, "proxy_logs"),
             node_id=self.node_id,
+            whitelist=self.whitelist,
         )
 
         self.api_key = os.environ.get("API_KEY", "")
@@ -102,7 +112,9 @@ class NodeAgent:
                 self._fetch_config()
                 self._collect_container_logs()
                 self._collect_proxy_logs()  # NEW: Collect proxy logs
+                self._collect_whitelist_logs()
                 self._upload_logs()
+                self._upload_whitelist_logs()
             except Exception as exc:
                 print(f"Sync error: {exc}")
             time.sleep(5)
@@ -323,81 +335,96 @@ class NodeAgent:
         self.log_collector.collect(self.config.get("deployments", []))
 
     def _collect_proxy_logs(self):
-        """
-        Collect logs from proxy unified logger.
-        Proxy logs are already in unified format, so we just need to
-        read them and insert into the local database for upload.
-        """
+        """Collect attack-log entries from each proxy's events.jsonl."""
         for deployment_id, instance in self.proxy_manager.get_all_proxies().items():
-            log_path = instance.logger.log_path
-            if not os.path.exists(log_path):
+            self._ingest_proxy_log_file(
+                log_path=instance.logger.log_path,
+                deployment_id=deployment_id,
+                state_prefix="proxy",
+                insert_fn=self.db.log_interaction,
+            )
+
+    def _collect_whitelist_logs(self):
+        """Collect whitelist entries from each proxy's whitelist.jsonl."""
+        for deployment_id, instance in self.proxy_manager.get_all_proxies().items():
+            wl_logger = instance.whitelist_logger
+            if not wl_logger:
                 continue
+            self._ingest_proxy_log_file(
+                log_path=wl_logger.log_path,
+                deployment_id=deployment_id,
+                state_prefix="whitelist",
+                insert_fn=self.db.log_whitelist_interaction,
+            )
 
-            # Use log_collector's offset tracking mechanism
-            state_key = f"proxy:{log_path}"
-            offset = self.log_collector.offsets.get(state_key, 0)
+    def _ingest_proxy_log_file(self, log_path, deployment_id, state_prefix, insert_fn):
+        """
+        Read new lines from a unified-format JSONL file and push them into
+        the local DB via ``insert_fn``. Offset tracking is shared with the
+        container log collector for consistency.
+        """
+        if not os.path.exists(log_path):
+            return
 
-            # If file was truncated/recreated (e.g. after restart), reset offset
-            file_size = os.path.getsize(log_path)
-            if offset > file_size:
-                print(f"[{self.node_id}] Proxy log truncated, resetting offset for {deployment_id}")
-                offset = 0
-                self.log_collector.offsets[state_key] = 0
+        state_key = f"{state_prefix}:{log_path}"
+        offset = self.log_collector.offsets.get(state_key, 0)
 
-            try:
-                with open(log_path, "r", encoding="utf-8") as f:
-                    f.seek(offset)
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        try:
-                            entry = json.loads(line)
-                            protocol_name = entry.get("protocol", {}).get("name", "unknown")
-                            req_parsed = entry.get("request", {}).get("parsed", {})
-                            resp_parsed = entry.get("response", {}).get("parsed", {})
+        # If file was truncated/recreated (e.g. after restart), reset offset
+        file_size = os.path.getsize(log_path)
+        if offset > file_size:
+            print(f"[{self.node_id}] {state_prefix} log truncated, resetting offset for {deployment_id}")
+            offset = 0
+            self.log_collector.offsets[state_key] = 0
 
-                            # Build flat metadata for frontend compatibility
-                            metadata = {
-                                "deployment.id": entry.get("deployment_id", deployment_id),
-                                "deployment.name": deployment_id,
-                                "event_id": entry.get("event_id", ""),
-                                "session.id": entry.get("session", {}).get("id", ""),
-                                "source": "proxy",
-                            }
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                f.seek(offset)
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
-                            # Build a human-readable log.message and add
-                            # protocol-specific flat keys the frontend expects
-                            src_ip = entry.get("network", {}).get("src_ip", "unknown")
-                            log_message = self._build_proxy_log_message(
-                                protocol_name, req_parsed, resp_parsed, src_ip
-                            )
-                            metadata["log.message"] = log_message
+                    protocol_name = entry.get("protocol", {}).get("name", "unknown")
+                    req_parsed = entry.get("request", {}).get("parsed", {})
+                    resp_parsed = entry.get("response", {}).get("parsed", {})
 
-                            # Flatten protocol-specific parsed fields for frontend
-                            for key, value in req_parsed.items():
-                                metadata[key] = value
-                            for key, value in resp_parsed.items():
-                                if key not in metadata:
-                                    metadata[key] = value
+                    metadata = {
+                        "deployment.id": entry.get("deployment_id", deployment_id),
+                        "deployment.name": deployment_id,
+                        "event_id": entry.get("event_id", ""),
+                        "session.id": entry.get("session", {}).get("id", ""),
+                        "source": state_prefix,
+                    }
 
-                            # Also store full unified entry for detailed analysis
-                            metadata["_unified_entry"] = entry
+                    src_ip = entry.get("network", {}).get("src_ip", "unknown")
+                    metadata["log.message"] = self._build_proxy_log_message(
+                        protocol_name, req_parsed, resp_parsed, src_ip
+                    )
 
-                            self.db.log_interaction(
-                                attacker_ip=src_ip,
-                                protocol=protocol_name,
-                                request_data=entry.get("request", {}).get("raw_hex", ""),
-                                response_data=entry.get("response", {}).get("raw_hex", ""),
-                                metadata=metadata,
-                                timestamp=entry.get("timestamp"),
-                            )
-                        except json.JSONDecodeError:
-                            continue
+                    for key, value in req_parsed.items():
+                        metadata[key] = value
+                    for key, value in resp_parsed.items():
+                        if key not in metadata:
+                            metadata[key] = value
 
-                    self.log_collector.offsets[state_key] = f.tell()
-                    self.log_collector._save_state()
-            except Exception as e:
-                print(f"[{self.node_id}] Error collecting proxy logs for {deployment_id}: {e}")
+                    metadata["_unified_entry"] = entry
+
+                    insert_fn(
+                        attacker_ip=src_ip,
+                        protocol=protocol_name,
+                        request_data=entry.get("request", {}).get("raw_hex", ""),
+                        response_data=entry.get("response", {}).get("raw_hex", ""),
+                        metadata=metadata,
+                        timestamp=entry.get("timestamp"),
+                    )
+
+                self.log_collector.offsets[state_key] = f.tell()
+                self.log_collector._save_state()
+        except Exception as e:
+            print(f"[{self.node_id}] Error collecting {state_prefix} logs for {deployment_id}: {e}")
 
     @staticmethod
     def _build_proxy_log_message(protocol, req_parsed, resp_parsed, src_ip):
@@ -469,6 +496,37 @@ class NodeAgent:
         except Exception:
             pass
 
+    def _upload_whitelist_logs(self):
+        logs = self.db.get_whitelist_logs(limit=50)
+        if not logs:
+            return
+
+        log_list = []
+        log_ids = []
+        for row in logs:
+            log_ids.append(row[0])
+            log_list.append({
+                "timestamp": row[1],
+                "attacker_ip": row[2],
+                "protocol": row[3],
+                "request_data": row[4],
+                "response_data": row[5],
+                "metadata": row[6],
+            })
+
+        payload = {"node_id": self.node_id, "logs": log_list}
+        try:
+            response = requests.post(
+                f"{self.server_url}/api/whitelist_logs",
+                json=payload,
+                headers=self._auth_headers(),
+                timeout=3,
+            )
+            if response.status_code == 200:
+                self.db.mark_whitelist_uploaded(log_ids)
+        except Exception:
+            pass
+
     def _fetch_config(self):
         try:
             response = requests.get(f"{self.server_url}/api/config/{self.node_id}", headers=self._auth_headers(), timeout=3)
@@ -476,6 +534,12 @@ class NodeAgent:
                 return
 
             raw_config = response.json()
+
+            # Apply server-pushed whitelist before config validation/normalization
+            # so it takes effect even if deployments are unchanged this cycle.
+            if isinstance(raw_config, dict) and isinstance(raw_config.get("whitelist"), dict):
+                self.whitelist.load_from_dict(raw_config["whitelist"])
+
             success, new_config, error = self.config_loader.parse_server_config(raw_config)
             if not success:
                 print(f"[{self.node_id}] Config validation failed: {error}")
@@ -493,6 +557,8 @@ class NodeAgent:
             incoming_deployments = json.dumps(new_config.get("deployments", []), sort_keys=True)
 
             if current_deployments != incoming_deployments or new_config.get("server_url") != self.server_url:
+                if getattr(self, "_is_applying", False):
+                    return
                 print(f"[{self.node_id}] Config change detected. Reloading deployments...")
                 self.config = new_config
                 self.server_url = new_config.get("server_url", self.server_url)

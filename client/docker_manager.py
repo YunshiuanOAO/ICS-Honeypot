@@ -374,13 +374,15 @@ class DockerDeploymentManager:
             compose_path = self._compose_path(deployment)
             mode = self._deployment_mode(deployment)
             if mode == "missing":
+                missing_msg = f"{deployment['id']}: Neither docker-compose.yml nor Dockerfile found in {source_root}"
                 self.status[deployment["id"]] = {
                     "state": "error",
                     "template": deployment.get("template") or deployment.get("type"),
                     "source_dir": deployment.get("source_dir"),
                     "project_name": self._project_name(deployment),
-                    "message": "Neither docker-compose.yml nor Dockerfile exists",
+                    "message": missing_msg,
                 }
+                messages.append(missing_msg)
                 success = False
                 continue
 

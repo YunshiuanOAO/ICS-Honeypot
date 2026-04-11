@@ -80,8 +80,8 @@ class MQTTProxy(BaseProxy):
         proxy.start()
     """
     
-    def __init__(self, config: ProxyConfig, logger: UnifiedLogger):
-        super().__init__(config, logger)
+    def __init__(self, config: ProxyConfig, logger: UnifiedLogger, **kwargs):
+        super().__init__(config, logger, **kwargs)
         self._client_info: dict = {}  # Store client info per session
     
     def parse_request(self, data: bytes, session_id: str = "") -> dict:

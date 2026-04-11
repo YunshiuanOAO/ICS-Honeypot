@@ -45,6 +45,7 @@ class ProxyInstance:
     backend_port: int
     proxy: BaseProxy
     logger: UnifiedLogger
+    whitelist_logger: Optional[UnifiedLogger] = None
 
 
 class ProxyManager:
@@ -97,14 +98,18 @@ class ProxyManager:
         log_root: str,
         node_id: str = "",
         default_backend_host: str = "127.0.0.1",
+        whitelist=None,
     ):
         self.log_root = log_root
         self.node_id = node_id
         self.default_backend_host = default_backend_host
-        
+        # Optional WhitelistManager — passed to every proxy so friendly
+        # traffic can be routed to a separate log file.
+        self.whitelist = whitelist
+
         self._proxies: Dict[str, ProxyInstance] = {}
         self._next_backend_port = 10000  # Start backend ports from 10000
-        
+
         os.makedirs(log_root, exist_ok=True)
     
     def add_proxy(
@@ -148,7 +153,16 @@ class ProxyManager:
             node_id=self.node_id,
             deployment_id=deployment_id,
         )
-        
+
+        # Separate logger for whitelisted traffic. Written to
+        # whitelist.jsonl alongside events.jsonl in the same deployment dir.
+        whitelist_logger = UnifiedLogger(
+            log_dir=log_dir,
+            node_id=self.node_id,
+            deployment_id=deployment_id,
+            filename="whitelist.jsonl",
+        )
+
         # Create proxy config
         config = ProxyConfig(
             listen_host="0.0.0.0",
@@ -160,10 +174,15 @@ class ProxyManager:
             deployment_id=deployment_id,
             extra_config=extra_config or {},
         )
-        
+
         # Create proxy instance
-        proxy = proxy_class(config, logger)
-        
+        proxy = proxy_class(
+            config,
+            logger,
+            whitelist_logger=whitelist_logger,
+            whitelist=self.whitelist,
+        )
+
         instance = ProxyInstance(
             deployment_id=deployment_id,
             protocol=protocol,
@@ -171,6 +190,7 @@ class ProxyManager:
             backend_port=backend_port,
             proxy=proxy,
             logger=logger,
+            whitelist_logger=whitelist_logger,
         )
         
         self._proxies[deployment_id] = instance

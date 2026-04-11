@@ -122,7 +122,6 @@ function showSection(sectionId) {
     if (sectionId === "dashboard") refreshData();
     if (sectionId === "agents") loadAgents();
     if (sectionId === "logs") loadLogConsole();
-
     // Attack Map lifecycle
     if (sectionId === "attackmap") {
         if (!attackMapInstance) {
@@ -496,7 +495,8 @@ Object.assign(window, {
     deleteAgent,
     toggleLogPause,
     clearLogConsole,
-    toggleTheme
+    toggleTheme,
+    openElkDashboard,
 });
 
 document.addEventListener("DOMContentLoaded", async () => {

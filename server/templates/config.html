@@ -268,9 +268,13 @@
         <!-- Sidebar File Manager -->
         <aside class="file-manager-sidebar">
             <div class="sidebar-section">
-                <div class="tree-item" id="nav-agent-settings" onclick="selectView('agent-settings')">
+                <div class="tree-item" id="nav-agent-settings" role="button" tabindex="0" onclick="selectView('agent-settings')">
                     <i data-lucide="settings"></i>
                     <span>Agent Settings</span>
+                </div>
+                <div class="tree-item" id="nav-whitelist" role="button" tabindex="0" onclick="selectView('whitelist')">
+                    <i data-lucide="shield-check"></i>
+                    <span>Whitelist</span>
                 </div>
             </div>
 
@@ -304,7 +308,7 @@
         </main>
     </div>
 
-    <script src="/static/config.js?v=3"></script>
+    <script src="/static/config.js?v=5"></script>
     <script>
         lucide.createIcons();
     </script>

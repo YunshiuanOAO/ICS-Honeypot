@@ -48,8 +48,11 @@ server/uploads/
 server/logs/
 server/package_library/
 
-# General logs
+# General logs & PID files
 *.log
+*.pid
+.server.pid
+.agent.pid
 logs/
 
 # ============================

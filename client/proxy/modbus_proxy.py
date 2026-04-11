@@ -85,8 +85,8 @@ class ModbusProxy(BaseProxy):
     # Modbus TCP header is 7 bytes (MBAP Header)
     MBAP_HEADER_SIZE = 7
     
-    def __init__(self, config: ProxyConfig, logger: UnifiedLogger):
-        super().__init__(config, logger)
+    def __init__(self, config: ProxyConfig, logger: UnifiedLogger, **kwargs):
+        super().__init__(config, logger, **kwargs)
         self._request_contexts: dict = {}  # Store request context for response parsing
     
     def parse_request(self, data: bytes, session_id: str = "") -> dict:

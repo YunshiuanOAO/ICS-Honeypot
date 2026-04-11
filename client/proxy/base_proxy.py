@@ -57,10 +57,20 @@ class BaseProxy(ABC):
     - get_protocol_info(): Return protocol identification
     """
     
-    def __init__(self, config: ProxyConfig, logger: UnifiedLogger):
+    def __init__(
+        self,
+        config: ProxyConfig,
+        logger: UnifiedLogger,
+        whitelist_logger: Optional[UnifiedLogger] = None,
+        whitelist=None,
+    ):
         self.config = config
         self.logger = logger
-        
+        # Optional separate logger for traffic from whitelisted IPs.
+        self.whitelist_logger = whitelist_logger
+        # WhitelistManager-like object; must expose .is_whitelisted(ip) -> bool.
+        self.whitelist = whitelist
+
         self._running = False
         self._server_socket: Optional[socket.socket] = None
         self._server_thread: Optional[threading.Thread] = None
@@ -114,7 +124,7 @@ class BaseProxy(ABC):
         print(f"[{self.config.protocol.upper()} Proxy] Started on :{self.config.listen_port} -> {self.config.backend_host}:{self.config.backend_port}")
     
     def stop(self):
-        """Stop the proxy server"""
+        """Stop the proxy server and wait for the server thread to exit"""
         self._running = False
         
         if self._server_socket:
@@ -122,6 +132,9 @@ class BaseProxy(ABC):
                 self._server_socket.close()
             except Exception:
                 pass
+        
+        if self._server_thread and self._server_thread.is_alive():
+            self._server_thread.join(timeout=3)
         
         print(f"[{self.config.protocol.upper()} Proxy] Stopped")
     
@@ -265,14 +278,21 @@ class BaseProxy(ABC):
         response_context: dict,
         session: SessionInfo,
     ):
-        """Create and write unified log entry"""
+        """Create and write unified log entry.
+
+        Routes whitelisted source IPs to ``whitelist_logger`` so that friendly
+        traffic is still recorded but never enters the attack-log pipeline.
+        """
         import base64
-        
+
+        src_ip = client_addr[0]
+        is_whitelisted = bool(self.whitelist and self.whitelist.is_whitelisted(src_ip))
+
         entry = LogEntry(
             node_id=self.config.node_id,
             deployment_id=self.config.deployment_id,
             network=NetworkInfo(
-                src_ip=client_addr[0],
+                src_ip=src_ip,
                 src_port=client_addr[1],
                 dst_ip=self.config.backend_host,
                 dst_port=self.config.backend_port,
@@ -293,8 +313,13 @@ class BaseProxy(ABC):
             ),
             session=session,
         )
-        
-        self.logger.log(entry)
+
+        if is_whitelisted:
+            entry.metadata["whitelisted"] = True
+            target_logger = self.whitelist_logger or self.logger
+            target_logger.log(entry)
+        else:
+            self.logger.log(entry)
     
     @property
     def is_running(self) -> bool:

@@ -25,8 +25,61 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "server.db")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
-
 db = ServerDB(DB_PATH)
+
+
+# --- Per-agent whitelist ---------------------------------------------------
+# Each agent has its own whitelist stored in the agents table (whitelist_json
+# column). The dashboard edits each agent's whitelist via
+# GET/PUT /api/whitelist?node_id=...  The whitelist is injected into the
+# agent's /api/config response so clients always receive their own list.
+_WHITELIST_DEFAULT: Dict[str, Any] = {"enabled": True, "ips": [], "cidrs": [], "description": ""}
+
+
+def _validate_whitelist_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize + validate an incoming whitelist. Raises HTTPException on bad input."""
+    import ipaddress
+
+    ips_in = payload.get("ips") or []
+    cidrs_in = payload.get("cidrs") or []
+    if isinstance(ips_in, str):
+        ips_in = [line.strip() for line in ips_in.splitlines()]
+    if isinstance(cidrs_in, str):
+        cidrs_in = [line.strip() for line in cidrs_in.splitlines()]
+
+    ips: List[str] = []
+    cidrs: List[str] = []
+    invalid: List[str] = []
+
+    for raw in ips_in:
+        s = str(raw).strip()
+        if not s:
+            continue
+        try:
+            ipaddress.ip_address(s)
+            ips.append(s)
+        except ValueError:
+            invalid.append(f"IP:{s}")
+
+    for raw in cidrs_in:
+        s = str(raw).strip()
+        if not s:
+            continue
+        try:
+            ipaddress.ip_network(s, strict=False)
+            cidrs.append(s)
+        except ValueError:
+            invalid.append(f"CIDR:{s}")
+
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid entries: {', '.join(invalid)}")
+
+    return {
+        "enabled": bool(payload.get("enabled", True)),
+        "ips": ips,
+        "cidrs": cidrs,
+        "description": str(payload.get("description") or ""),
+    }
 
 # Load auth secrets from .env
 auth_secrets = load_secrets()
@@ -335,12 +388,53 @@ async def get_config(node_id: str, request: Request):
         }
         
     response_data['name'] = agent['name'] # Ensure we return the authoritative name
+    # Inject the per-agent whitelist so clients apply their own list without
+    # needing a local whitelist.json file.
+    wl = await db.get_agent_whitelist(node_id)
+    response_data['whitelist'] = wl if wl else dict(_WHITELIST_DEFAULT)
     return JSONResponse(content=response_data)
 
 @app.post("/api/logs", dependencies=[Depends(require_api_key)])
 async def upload_logs(batch: LogBatch):
     count = await db.insert_logs(batch.node_id, batch.logs)
     return {"status": "received", "count": count}
+
+
+@app.post("/api/whitelist_logs", dependencies=[Depends(require_api_key)])
+async def upload_whitelist_logs(batch: LogBatch):
+    """Receive whitelist (friendly) traffic from agents.
+
+    Stored in the whitelist_logs table — never enters the attack-log
+    pipeline (attack map, recent_logs, ELK ingest).
+    """
+    count = await db.insert_whitelist_logs(batch.node_id, batch.logs)
+    return {"status": "received", "count": count}
+
+
+@app.get("/api/whitelist", dependencies=[Depends(require_session)])
+async def get_whitelist(node_id: str = ""):
+    """Return the whitelist for a specific agent."""
+    if not node_id:
+        raise HTTPException(status_code=400, detail="node_id query parameter is required")
+    agent = await db.get_agent(node_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    wl = await db.get_agent_whitelist(node_id)
+    return wl if wl else dict(_WHITELIST_DEFAULT)
+
+
+@app.put("/api/whitelist", dependencies=[Depends(require_session)])
+async def update_whitelist(payload: Dict[str, Any]):
+    """Update the whitelist for a specific agent. Pushed on the agent's next config fetch."""
+    node_id = payload.pop("node_id", None)
+    if not node_id:
+        raise HTTPException(status_code=400, detail="node_id is required in the payload")
+    agent = await db.get_agent(node_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    data = _validate_whitelist_payload(payload)
+    await db.update_agent_whitelist(node_id, data)
+    return {"status": "saved", "whitelist": data}
 
 
 @app.get("/api/server_info")
@@ -746,7 +840,10 @@ async def delete_package_library_item(package_id: str):
     if not os.path.exists(package_root):
         raise HTTPException(status_code=404, detail="Package not found")
 
-    shutil.rmtree(package_root)
+    try:
+        shutil.rmtree(package_root)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete package: {e}")
     return {"status": "deleted"}
 
 
@@ -819,6 +916,18 @@ async def reset_agent(node_id: str):
 @app.get("/api/recent_logs", dependencies=[Depends(require_session)])
 async def recent_logs():
     logs = await db.get_recent_logs(limit=50)
+    return logs
+
+
+@app.get("/api/whitelist_logs", dependencies=[Depends(require_session)])
+async def recent_whitelist_logs(limit: int = 100, node_id: Optional[str] = None):
+    """Return recent whitelist (friendly) traffic entries.
+
+    Optional query params:
+    - ``limit``: max rows to return (default 100)
+    - ``node_id``: filter to a single agent
+    """
+    logs = await db.get_recent_whitelist_logs(limit=limit, node_id=node_id)
     return logs
 
 def validate_config_proxy_settings(config: Dict[str, Any]) -> tuple[bool, str]:

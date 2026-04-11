@@ -4,12 +4,13 @@ const API_BASE = "/api";
 // State
 let agentConfig = null;
 let PACKAGE_LIBRARY = [];
-let currentView = 'agent-settings'; // 'agent-settings', 'deployment-{id}', 'file-{deploymentId}-{fileIndex}'
+let currentView = 'agent-settings'; // 'agent-settings', 'whitelist', 'deployment-{id}', 'file-{deploymentId}-{fileIndex}'
+let _whitelistData = null; // Cached whitelist data for this agent
 
 async function init() {
     Toast.init();
     await loadPackageLibrary();
-    await loadConfig();
+    await Promise.all([loadConfig(), loadWhitelist()]);
 }
 
 const Toast = {
@@ -173,8 +174,13 @@ async function handleZipUpload(deploymentId, input, event) {
             method: 'POST',
             body: formData
         });
+        if (!response.ok) {
+            let detail = 'Failed to import zip archive';
+            try { detail = (await response.json()).detail || detail; } catch (_) {}
+            throw new Error(detail);
+        }
         const data = await response.json();
-        if (!response.ok || data.status !== 'ok') {
+        if (data.status !== 'ok') {
             throw new Error(data.detail || data.message || 'Failed to import zip archive');
         }
 
@@ -322,9 +328,10 @@ async function deleteLibraryPackage(packageId, event) {
         const response = await fetch(`${API_BASE}/package_library/${packageId}`, {
             method: 'DELETE'
         });
-        const data = await response.json();
         if (!response.ok) {
-            throw new Error(data.detail || 'Failed to delete package');
+            let detail = 'Failed to delete package';
+            try { detail = (await response.json()).detail || detail; } catch (_) {}
+            throw new Error(detail);
         }
         Toast.success("Package deleted from library");
         await loadPackageLibrary();
@@ -345,6 +352,9 @@ function updateSidebarSelection() {
     
     if (currentView === 'agent-settings') {
         const el = document.getElementById('nav-agent-settings');
+        if (el) el.classList.add('active');
+    } else if (currentView === 'whitelist') {
+        const el = document.getElementById('nav-whitelist');
         if (el) el.classList.add('active');
     } else if (currentView.startsWith('deployment-')) {
         const id = currentView.replace('deployment-', '');
@@ -381,6 +391,10 @@ function renderMainEditor() {
                 </div>
             </div>
         `;
+    } else if (currentView === 'whitelist') {
+        header.innerHTML = `System / Whitelist`;
+        renderWhitelistView(content);
+        return;
     } else if (currentView.startsWith('deployment-')) {
         const id = currentView.replace('deployment-', '');
         const deployment = agentConfig.deployments.find(d => d.id === id);
@@ -633,7 +647,13 @@ async function saveConfig() {
                 config: agentConfig
             })
         });
-        
+
+        if (!response.ok) {
+            let detail = "Failed to save configuration";
+            try { detail = (await response.json()).detail || detail; } catch (_) {}
+            Toast.error(detail);
+            return;
+        }
         const data = await response.json();
         if (data.status !== "updated") {
             Toast.error(data.message || "Failed to save configuration");
@@ -656,6 +676,181 @@ async function saveConfig() {
     } catch (e) {
         console.error(e);
         Toast.error("Failed to save configuration.");
+    }
+}
+
+// ============ Whitelist (per-agent) ============
+
+async function loadWhitelist() {
+    try {
+        const resp = await fetch(`${API_BASE}/whitelist?node_id=${encodeURIComponent(NODE_ID)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        _whitelistData = await resp.json();
+    } catch (_e) {
+        _whitelistData = { enabled: true, ips: [], cidrs: [], description: "" };
+    }
+}
+
+function renderWhitelistView(container) {
+    const data = _whitelistData || { enabled: true, ips: [], cidrs: [] };
+    container.innerHTML = `
+        <div class="settings-form">
+            <h3 style="margin-top:0">
+                <span style="display:flex; align-items:center; gap:8px;">
+                    <i data-lucide="shield-check" style="width:20px; height:20px;"></i>
+                    Whitelist Configuration
+                </span>
+            </h3>
+            <p style="opacity: 0.7; font-size: 13px; margin-bottom: 1.5rem;">
+                One entry per line. Traffic from these sources is still forwarded to honeypots,
+                but recorded in a separate log and excluded from the attack map.
+                Changes are pushed to this agent on its next config fetch (within ~5s).
+            </p>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Whitelist Status</label>
+                    <div style="display:flex; align-items:center; gap:10px; margin-top:4px;">
+                        <label class="switch">
+                            <input type="checkbox" id="wl-enabled" ${data.enabled ? 'checked' : ''}
+                                onchange="document.getElementById('wl-status-label').textContent = this.checked ? 'Enabled' : 'Disabled'">
+                            <span class="slider"></span>
+                        </label>
+                        <span id="wl-status-label" style="font-size:14px;">${data.enabled ? 'Enabled' : 'Disabled'}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>IPs (one per line)</label>
+                    <textarea id="wl-ips" rows="8" style="resize:vertical; font-family:'JetBrains Mono',monospace; font-size:13px;"
+                        placeholder="1.2.3.4&#10;203.0.113.7">${escapeHtml((data.ips || []).join('\n'))}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>CIDR ranges (one per line)</label>
+                    <textarea id="wl-cidrs" rows="8" style="resize:vertical; font-family:'JetBrains Mono',monospace; font-size:13px;"
+                        placeholder="10.0.0.0/8&#10;192.168.1.0/24">${escapeHtml((data.cidrs || []).join('\n'))}</textarea>
+                </div>
+            </div>
+
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:2rem;">
+                <button class="btn btn-primary" type="button" onclick="saveWhitelist()">
+                    <i data-lucide="save"></i>
+                    <span>Save Whitelist</span>
+                </button>
+                <span id="wl-save-status" style="font-size: 13px; opacity: 0.7;"></span>
+            </div>
+
+            <div style="margin-top:1rem; padding-top:1.5rem; border-top:1px solid var(--border);">
+                <h4 style="margin-top:0; display:flex; align-items:center; gap:8px;">
+                    <i data-lucide="list" style="width:16px; height:16px;"></i>
+                    Recent Whitelist Logs
+                    <span id="wl-log-count" style="font-size:12px; opacity:0.6; font-weight:normal;"></span>
+                </h4>
+                <div id="wl-logs-container">
+                    <div style="text-align:center; opacity:0.5; padding:2rem;">Loading...</div>
+                </div>
+            </div>
+        </div>
+    `;
+    lucide.createIcons();
+    loadWhitelistLogs();
+}
+
+async function saveWhitelist() {
+    const enabledEl = document.getElementById("wl-enabled");
+    const ipsEl = document.getElementById("wl-ips");
+    const cidrsEl = document.getElementById("wl-cidrs");
+    const statusEl = document.getElementById("wl-save-status");
+
+    const payload = {
+        node_id: NODE_ID,
+        enabled: !!(enabledEl && enabledEl.checked),
+        ips: (ipsEl ? ipsEl.value : "").split("\n").map(s => s.trim()).filter(Boolean),
+        cidrs: (cidrsEl ? cidrsEl.value : "").split("\n").map(s => s.trim()).filter(Boolean),
+    };
+
+    if (statusEl) statusEl.textContent = "Saving...";
+
+    try {
+        const resp = await fetch(`${API_BASE}/whitelist`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            let detail = `HTTP ${resp.status}`;
+            try {
+                const err = await resp.json();
+                if (err && err.detail) detail = err.detail;
+            } catch (_e2) { /* ignore */ }
+            throw new Error(detail);
+        }
+        const data = await resp.json();
+        _whitelistData = data.whitelist || payload;
+        if (statusEl) statusEl.textContent = "Saved. Agent will pick up changes within ~5s.";
+        Toast.success("Whitelist saved");
+    } catch (e) {
+        if (statusEl) statusEl.textContent = "";
+        Toast.error(`Failed to save whitelist: ${e.message || e}`);
+    }
+}
+
+function formatTime(timestamp) {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return "--:--:--";
+    return date.toLocaleTimeString("en-US", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false
+    });
+}
+
+async function loadWhitelistLogs() {
+    const container = document.getElementById("wl-logs-container");
+    const countEl = document.getElementById("wl-log-count");
+    if (!container) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/whitelist_logs?limit=100&node_id=${encodeURIComponent(NODE_ID)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const logs = await resp.json();
+
+        if (countEl) countEl.textContent = `(${logs.length})`;
+
+        if (!logs.length) {
+            container.innerHTML = `<div style="text-align:center; opacity:0.5; padding:2rem;">No whitelist logs yet</div>`;
+            return;
+        }
+
+        let html = `
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                    <thead>
+                        <tr style="text-align: left; opacity: 0.7;">
+                            <th style="padding: 8px;">Time</th>
+                            <th style="padding: 8px;">Protocol</th>
+                            <th style="padding: 8px;">Source IP</th>
+                            <th style="padding: 8px;">Summary</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        logs.forEach(log => {
+            const meta = typeof log.metadata === 'string' ? (() => { try { return JSON.parse(log.metadata); } catch(_) { return {}; } })() : (log.metadata || {});
+            const summary = meta["log.message"] || log.protocol || "Interaction";
+            html += `
+                <tr style="border-top: 1px solid var(--border);">
+                    <td style="padding: 8px; font-family: 'JetBrains Mono', monospace;">${formatTime(log.timestamp)}</td>
+                    <td style="padding: 8px;">${escapeHtml(log.protocol || "")}</td>
+                    <td style="padding: 8px; font-family: 'JetBrains Mono', monospace;">${escapeHtml(log.attacker_ip || "")}</td>
+                    <td style="padding: 8px;">${escapeHtml(summary)}</td>
+                </tr>
+            `;
+        });
+        html += `</tbody></table></div>`;
+        container.innerHTML = html;
+    } catch (_e) {
+        container.innerHTML = `<div style="text-align:center; color:var(--danger); padding:2rem;">Failed to load whitelist logs</div>`;
     }
 }
 

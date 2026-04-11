@@ -12,6 +12,9 @@ set -e  # Exit on any error
 # ─────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+PID_FILE="$SCRIPT_DIR/.server.pid"
+LOG_FILE="$SCRIPT_DIR/server.log"
+DAEMON_MODE=false
 
 # ─────────────────────────────────────────
 # 2. Color Helpers
@@ -28,7 +31,76 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 fail()  { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # ─────────────────────────────────────────
-# 3. Cleanup Function
+# 3. Command Handling (stop / status / logs)
+# ─────────────────────────────────────────
+_server_running() {
+    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+case "${1:-}" in
+    stop)
+        if _server_running; then
+            PID=$(cat "$PID_FILE")
+            info "Stopping server (PID $PID)..."
+            kill "$PID" 2>/dev/null || true
+            # Wait for graceful shutdown
+            for i in $(seq 1 10); do
+                kill -0 "$PID" 2>/dev/null || break
+                sleep 1
+            done
+            kill -9 "$PID" 2>/dev/null || true
+            rm -f "$PID_FILE"
+            ok "Server stopped."
+        else
+            warn "Server is not running."
+            rm -f "$PID_FILE"
+        fi
+        exit 0
+        ;;
+    status)
+        if _server_running; then
+            PID=$(cat "$PID_FILE")
+            ok "Server is running (PID $PID)"
+        else
+            warn "Server is not running."
+            rm -f "$PID_FILE"
+        fi
+        exit 0
+        ;;
+    logs)
+        if [ -f "$LOG_FILE" ]; then
+            tail -f "$LOG_FILE"
+        else
+            warn "No log file found at $LOG_FILE"
+        fi
+        exit 0
+        ;;
+    -d|--daemon)
+        DAEMON_MODE=true
+        ;;
+    -h|--help)
+        echo "Usage: $0 [-d|--daemon] | stop | status | logs"
+        echo ""
+        echo "  (no args)    Start in foreground"
+        echo "  -d, --daemon Start in background"
+        echo "  stop         Stop background server"
+        echo "  status       Check if server is running"
+        echo "  logs         Tail server log file"
+        exit 0
+        ;;
+    "")
+        ;; # foreground mode, default
+    *)
+        fail "Unknown command: $1. Use -h for help."
+        ;;
+esac
+
+if _server_running; then
+    fail "Server is already running (PID $(cat "$PID_FILE")). Run '$0 stop' first."
+fi
+
+# ─────────────────────────────────────────
+# 3b. Cleanup Function (foreground mode only)
 # ─────────────────────────────────────────
 cleanup() {
     echo ""
@@ -40,10 +112,13 @@ cleanup() {
         cd "$REPO_ROOT/elk" || true
         docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null || true
     fi
+    rm -f "$PID_FILE"
     ok "Services stopped."
 }
 
-trap cleanup EXIT
+if [ "$DAEMON_MODE" = false ]; then
+    trap cleanup EXIT
+fi
 
 # ─────────────────────────────────────────
 # 4. Detect OS
@@ -387,8 +462,21 @@ echo -e "${GREEN}  APS Honeypot Server                    ${NC}"
 echo -e "${GREEN}==========================================${NC}"
 echo -e "  Dashboard: ${CYAN}${SERVER_URL}${NC}"
 echo -e "  Kibana:    ${CYAN}${KIBANA_URL}${NC}"
-echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop"
-echo -e "${GREEN}==========================================${NC}"
-echo ""
 
-python3 main.py
+if [ "$DAEMON_MODE" = true ]; then
+    echo -e "  Mode:      ${CYAN}Background (daemon)${NC}"
+    echo -e "  Log:       ${CYAN}${LOG_FILE}${NC}"
+    echo -e "  Stop:      ${CYAN}$0 stop${NC}"
+    echo -e "${GREEN}==========================================${NC}"
+    echo ""
+    nohup python3 main.py >> "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    ok "Server started in background (PID $!)"
+    ok "View logs: $0 logs"
+else
+    echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop"
+    echo -e "${GREEN}==========================================${NC}"
+    echo ""
+    echo $$ > "$PID_FILE"
+    python3 main.py
+fi

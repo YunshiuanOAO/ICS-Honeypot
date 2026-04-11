@@ -48,8 +48,8 @@ class HTTPProxy(BaseProxy):
         proxy.start()
     """
     
-    def __init__(self, config: ProxyConfig, logger: UnifiedLogger):
-        super().__init__(config, logger)
+    def __init__(self, config: ProxyConfig, logger: UnifiedLogger, **kwargs):
+        super().__init__(config, logger, **kwargs)
         # Max body size to log (prevent memory issues with large uploads)
         self.max_body_log_size = config.extra_config.get("max_body_log_size", 10 * 1024)  # 10KB default
     
