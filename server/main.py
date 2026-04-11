@@ -617,6 +617,9 @@ def _safe_extract_zip(archive_path: str, extract_dir: str):
             if not clean_parts:
                 continue
 
+            if clean_parts[0] == "__MACOSX":
+                continue
+
             target_path = (base_path / Path(*clean_parts)).resolve()
             if base_path not in target_path.parents and target_path != base_path:
                 continue
@@ -634,7 +637,10 @@ def _read_extracted_files(extracted_files, extract_dir: str):
     relative_paths = []
     for file_path in extracted_files:
         try:
-            relative_paths.append(Path(file_path).resolve().relative_to(extract_root))
+            rp = Path(file_path).resolve().relative_to(extract_root)
+            if rp.parts and rp.parts[0] == "__MACOSX":
+                continue
+            relative_paths.append(rp)
         except ValueError:
             continue
 
