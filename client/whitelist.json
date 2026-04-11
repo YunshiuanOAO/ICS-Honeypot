@@ -1,6 +1,0 @@
-{
-  "enabled": true,
-  "description": "Friendly IPs whose traffic should NOT be recorded as attack logs. They are still proxied through to the honeypot, but logged separately to whitelist.jsonl and uploaded to the server's whitelist_logs table.",
-  "ips": [],
-  "cidrs": []
-}

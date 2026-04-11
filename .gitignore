@@ -25,9 +25,8 @@ pip-delete-this-directory.txt
 # ============================
 # Secrets & Environment
 # ============================
-# ⚠️ CRITICAL: Never commit .env files — they contain API keys & passwords
+# CRITICAL: Never commit .env files — they contain API keys & passwords
 .env
-auth_secrets.json
 
 # ============================
 # Databases
@@ -36,19 +35,36 @@ auth_secrets.json
 *.sqlite3
 
 # ============================
-# Runtime & Generated Data
+# Client Runtime & Generated Data
 # ============================
-# Client runtime (Docker containers, proxy logs, collected data)
+# Docker containers, proxy logs, collected data
 client/runtime/
+
+# Local agent config (generated at runtime; example file is tracked)
 client/client_config.json
+client/client_config_gateway.json
+
+# Local whitelist fallback (per-agent whitelist is stored in server DB)
+client/whitelist.json
+
+# Agent log
 client/agent.log
 
-# Server runtime
+# ============================
+# Server Runtime & Generated Data
+# ============================
+# Upload staging & package library
 server/uploads/
-server/logs/
-server/package_library/
 
-# General logs & PID files
+# JSON logs for ELK ingestion
+server/logs/
+
+# Legacy global whitelist file (replaced by per-agent DB storage)
+server/whitelist.json
+
+# ============================
+# Logs & PID files
+# ============================
 *.log
 *.pid
 .server.pid
@@ -58,7 +74,6 @@ logs/
 # ============================
 # ELK Stack (Docker volumes)
 # ============================
-# These are managed by docker-compose volumes, not tracked in git
 server/elk/es_data/
 server/elk/filebeat_data/
 
@@ -70,6 +85,7 @@ server/elk/filebeat_data/
 .LSOverride
 Thumbs.db
 Desktop.ini
+# Office temp / lock files
 ~$*
 
 # ============================
@@ -77,6 +93,7 @@ Desktop.ini
 # ============================
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 *~
@@ -98,5 +115,5 @@ slide/
 tests/
 spec/
 
-# AI assistant config
+# AI assistant local settings (CLAUDE.md is tracked as project docs)
 .claude/
