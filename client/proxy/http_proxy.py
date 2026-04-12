@@ -412,3 +412,161 @@ class HTTPProxy(BaseProxy):
         
         # Reconstruct response
         return new_headers_bytes + delimiter + body
+
+    def _read_one_http_request(
+        self, client_sock: socket.socket, pending: bytes = b""
+    ) -> Tuple[bytes, bytes]:
+        """
+        讀取「一筆」完整 HTTP/1.x 請求（可跨多次 recv）。
+        解決 BaseProxy 單次 recv(4096) 導致 Socket.IO / 大 POST body 被截斷、後端回 400 或
+        Engine.IO 一直 connect_error 的問題。
+
+        Returns:
+            (完整請求 bytes, 同一 TCP 連線上多餘的 pipelined 資料留給下一輪)
+        """
+        max_total = int(self.config.extra_config.get("max_http_request_bytes", 10 * 1024 * 1024))
+        max_hdr = int(self.config.extra_config.get("max_http_header_bytes", 65536))
+        buf = pending
+
+        while b"\r\n\r\n" not in buf and b"\n\n" not in buf:
+            if len(buf) > max_hdr:
+                return buf[:max_hdr], b""
+            chunk = client_sock.recv(self.config.buffer_size)
+            if not chunk:
+                return buf, b""
+            buf += chunk
+
+        if b"\r\n\r\n" in buf:
+            hend = buf.index(b"\r\n\r\n") + 4
+            line_sep = b"\r\n"
+        else:
+            hend = buf.index(b"\n\n") + 2
+            line_sep = b"\n"
+
+        header_bytes = buf[:hend]
+        rest = buf[hend:]
+        hlower = header_bytes.decode("utf-8", errors="replace").lower()
+
+        content_length: Optional[int] = None
+        for line in hlower.split("\r\n"):
+            if line.startswith("content-length:"):
+                try:
+                    content_length = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+                break
+
+        if len(header_bytes) > max_total:
+            return header_bytes[:max_total], b""
+
+        if "transfer-encoding: chunked" in hlower and content_length is None:
+            merged = header_bytes + rest
+            cap = max_total - len(merged)
+            extra = self._drain_until_marker(client_sock, b"0\r\n\r\n", cap)
+            merged = (merged + extra)[:max_total]
+            return merged, b""
+
+        if content_length is not None:
+            room = max(0, max_total - len(header_bytes))
+            cl = min(content_length, room)
+            body = rest
+            if len(body) >= cl:
+                body_chunk = body[:cl]
+                leftover = body[cl:]
+            else:
+                while len(body) < cl:
+                    chunk = client_sock.recv(
+                        max(self.config.buffer_size, cl - len(body))
+                    )
+                    if not chunk:
+                        break
+                    body += chunk
+                body_chunk = body[:cl]
+                leftover = body[cl:]
+            req = header_bytes + body_chunk
+            if len(req) > max_total:
+                return req[:max_total], leftover
+            return req, leftover
+
+        # 無 body（GET/HEAD 等）或無 Content-Length 的簡化處理：不讀 body，剩餘 byte 留給 pipelining
+        return header_bytes, rest
+
+    def _drain_until_marker(
+        self, sock: socket.socket, marker: bytes, max_bytes: int
+    ) -> bytes:
+        out = b""
+        while len(out) < max_bytes:
+            chunk = sock.recv(self.config.buffer_size)
+            if not chunk:
+                break
+            out += chunk
+            if marker in out:
+                break
+        return out[:max_bytes]
+
+    def _handle_connection(
+        self, client_sock: socket.socket, client_addr: Tuple[str, int], session_id: str
+    ):
+        """與 BaseProxy 相同流程，但 client 端改為讀滿整筆 HTTP 再轉發。"""
+        backend_sock = None
+        try:
+            backend_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            backend_sock.settimeout(self.config.timeout)
+            backend_sock.connect((self.config.backend_host, self.config.backend_port))
+
+            client_sock.settimeout(self.config.timeout)
+            session = self.logger.get_or_create_session(session_id)
+            pending = b""
+
+            while self._running:
+                try:
+                    request_data, pending = self._read_one_http_request(
+                        client_sock, pending
+                    )
+                except Exception as e:
+                    print(f"[HTTP Proxy] read full request: {e}")
+                    break
+                if not request_data:
+                    break
+
+                request_context = self.parse_request(request_data, session_id)
+
+                try:
+                    backend_sock.sendall(request_data)
+                except Exception as e:
+                    print(f"[HTTP Proxy] Backend send error: {e}")
+                    break
+
+                response_data = b""
+                try:
+                    response_data = self._read_response(backend_sock, request_context)
+                except socket.timeout:
+                    pass
+                except Exception as e:
+                    print(f"[HTTP Proxy] Backend recv error: {e}")
+
+                response_context = self.parse_response(response_data, request_context)
+
+                self._log_traffic(
+                    client_addr=client_addr,
+                    request_data=request_data,
+                    response_data=response_data,
+                    request_context=request_context,
+                    response_context=response_context,
+                    session=session,
+                )
+
+                if response_data:
+                    try:
+                        client_sock.sendall(response_data)
+                    except Exception:
+                        break
+
+        except Exception as e:
+            print(f"[HTTP Proxy] Connection error from {client_addr}: {e}")
+        finally:
+            if backend_sock:
+                backend_sock.close()
+            client_sock.close()
+            self.logger.close_session(session_id)
+            self._cleanup_session(session_id)
