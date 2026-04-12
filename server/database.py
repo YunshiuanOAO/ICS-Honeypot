@@ -110,17 +110,20 @@ class ServerDB:
         runtime_status_str = json.dumps(runtime_status or {})
         
         async with aiosqlite.connect(self.db_path) as db:
-            # Check if agent exists to preserve is_active/runtime status
-            async with db.execute('SELECT is_active, runtime_status_json FROM agents WHERE node_id = ?', (node_id,)) as cursor:
+            # Check if agent exists to preserve is_active/runtime status/whitelist
+            async with db.execute('SELECT is_active, runtime_status_json, whitelist_json FROM agents WHERE node_id = ?', (node_id,)) as cursor:
                 row = await cursor.fetchone()
                 is_active = row[0] if row else 0 # Default to 0 (Inactive) if new agent
                 if row and row[1] and not runtime_status:
                     runtime_status_str = row[1]
+                # Preserve existing whitelist — INSERT OR REPLACE would wipe it
+                # because SQLite REPLACE = DELETE + INSERT.
+                whitelist_json = row[2] if row else None
 
             await db.execute('''
-                INSERT OR REPLACE INTO agents (node_id, name, ip, last_heartbeat, status, config_json, is_active, runtime_status_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (node_id, name, ip, now, "Online", config_str, is_active, runtime_status_str))
+                INSERT OR REPLACE INTO agents (node_id, name, ip, last_heartbeat, status, config_json, is_active, runtime_status_json, whitelist_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (node_id, name, ip, now, "Online", config_str, is_active, runtime_status_str, whitelist_json))
             
             await db.commit()
         return config

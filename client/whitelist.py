@@ -135,9 +135,13 @@ class WhitelistManager:
         try:
             mtime = os.path.getmtime(self.config_path)
         except OSError:
-            # File missing — clear state but don't crash.
+            # File missing — only clear state that was loaded from a local
+            # file.  Server-pushed state (set via load_from_dict) marks
+            # _mtime=1.0; real file mtimes are large Unix timestamps >> 1.0.
+            # Never wipe server-pushed data just because the local file is
+            # absent — that is the normal production path.
             with self._lock:
-                if self._enabled or self._exact_ips or self._networks:
+                if self._mtime > 1.0 and (self._enabled or self._exact_ips or self._networks):
                     self._enabled = False
                     self._exact_ips = set()
                     self._networks = []
