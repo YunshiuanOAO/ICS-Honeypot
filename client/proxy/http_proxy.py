@@ -364,11 +364,39 @@ class HTTPProxy(BaseProxy):
         
         return response
     
+    def _decode_chunked_body(self, body: bytes) -> bytes:
+        """Decode a chunked Transfer-Encoding body into plain bytes."""
+        decoded = b""
+        pos = 0
+        while pos < len(body):
+            crlf = body.find(b"\r\n", pos)
+            if crlf == -1:
+                break
+            size_str = body[pos:crlf].strip()
+            if b";" in size_str:
+                size_str = size_str.split(b";", 1)[0].strip()
+            try:
+                chunk_size = int(size_str, 16)
+            except ValueError:
+                break
+            if chunk_size == 0:
+                break
+            start = crlf + 2
+            end = start + chunk_size
+            if end > len(body):
+                decoded += body[start:]
+                break
+            decoded += body[start:end]
+            pos = end + 2
+        return decoded
+
     def _rewrite_response_headers(self, response: bytes) -> bytes:
         """
         Rewrite HTTP response headers to fix compatibility issues.
         - Force Connection: close since proxy only handles one request per connection
         - Removes existing Connection and Transfer-Encoding headers
+        - If Transfer-Encoding was chunked, decodes the body and adds Content-Length
+        - Adds Content-Length if missing, so the browser knows when the response ends
         """
         # Find header/body boundary
         if b"\r\n\r\n" in response:
@@ -381,36 +409,51 @@ class HTTPProxy(BaseProxy):
             line_ending = b"\n"
         else:
             return response  # No headers found, return as-is
-        
+
         headers_bytes = response[:header_end]
         body = response[header_end + len(delimiter):]
-        
+
         # Split by line ending
         lines = headers_bytes.split(line_ending)
         new_lines = []
-        
+        was_chunked = False
+        has_content_length = False
+
         for i, line in enumerate(lines):
-            # Always keep the status line (first line)
             if i == 0:
                 new_lines.append(line)
                 continue
-            
+
             line_str = line.decode("utf-8", errors="replace")
             line_str_lower = line_str.lower()
-            
-            # Skip connection and transfer-encoding headers
-            if line_str_lower.startswith("connection:") or line_str_lower.startswith("transfer-encoding:"):
+
+            if line_str_lower.startswith("connection:"):
                 continue
-            
+            if line_str_lower.startswith("transfer-encoding:"):
+                if "chunked" in line_str_lower:
+                    was_chunked = True
+                continue
+            if line_str_lower.startswith("content-length:"):
+                has_content_length = True
+
             new_lines.append(line)
-        
-        # Add Connection: close
+
+        # Decode chunked body so the browser can read it as plain content
+        if was_chunked and body:
+            body = self._decode_chunked_body(body)
+            # Remove stale Content-Length (if any) and recalculate
+            new_lines = [l for l in new_lines
+                         if not l.decode("utf-8", errors="replace").lower().startswith("content-length:")]
+            has_content_length = False
+
+        # Ensure Content-Length is present so the browser knows when the
+        # response ends without waiting for Connection: close / TCP FIN.
+        if not has_content_length:
+            new_lines.append(f"Content-Length: {len(body)}".encode())
+
         new_lines.append(b"Connection: close")
-        
-        # Reconstruct headers with proper line endings
+
         new_headers_bytes = line_ending.join(new_lines)
-        
-        # Reconstruct response
         return new_headers_bytes + delimiter + body
 
     def _read_one_http_request(
@@ -561,6 +604,13 @@ class HTTPProxy(BaseProxy):
                         client_sock.sendall(response_data)
                     except Exception:
                         break
+
+                # Response always carries Connection: close, so the browser
+                # will not send another request on this TCP connection.  Break
+                # immediately to close the socket — otherwise the proxy would
+                # block for up to 30 s waiting for a next request that never
+                # comes, and the browser (reading until close) would stall.
+                break
 
         except Exception as e:
             print(f"[HTTP Proxy] Connection error from {client_addr}: {e}")
