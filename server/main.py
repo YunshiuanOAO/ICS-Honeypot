@@ -759,10 +759,15 @@ def _load_package_from_library(package_id: str):
     package_source_dir = metadata.get("source_dir") or "package"
     package_files_root = os.path.join(package_root, "package", package_source_dir)
     files = []
-    for root, _, filenames in os.walk(package_files_root):
+    for root, dirs, filenames in os.walk(package_files_root):
+        dirs[:] = [d for d in dirs if d != "__MACOSX"]
         for filename in sorted(filenames):
+            if filename.startswith("._"):
+                continue
             absolute_path = os.path.join(root, filename)
             relative_path = os.path.relpath(absolute_path, package_files_root).replace("\\", "/")
+            if relative_path.startswith("__MACOSX/") or "/__MACOSX/" in relative_path:
+                continue
             try:
                 content = Path(absolute_path).read_text(encoding="utf-8")
             except UnicodeDecodeError:
@@ -808,7 +813,7 @@ async def import_package_zip(archive: UploadFile = File(...)):
             files=result["files"],
             archive_name=filename,
         )
-        return {
+        response = {
             "status": "ok",
             "import_id": import_id,
             "source_dir": result["source_dir"],
@@ -816,6 +821,8 @@ async def import_package_zip(archive: UploadFile = File(...)):
             "package_id": library_package["id"],
             "package_name": library_package["name"],
         }
+        shutil.rmtree(import_root, ignore_errors=True)
+        return response
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail=f"Invalid zip archive: {exc}")
     except Exception as exc:

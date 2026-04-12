@@ -83,6 +83,11 @@ class MQTTProxy(BaseProxy):
     def __init__(self, config: ProxyConfig, logger: UnifiedLogger, **kwargs):
         super().__init__(config, logger, **kwargs)
         self._client_info: dict = {}  # Store client info per session
+
+    @property
+    def full_duplex(self) -> bool:
+        """MQTT is async — broker pushes messages at any time."""
+        return True
     
     def parse_request(self, data: bytes, session_id: str = "") -> dict:
         """Parse MQTT packet from client"""

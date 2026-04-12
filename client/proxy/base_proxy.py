@@ -181,8 +181,16 @@ class BaseProxy(ABC):
             if self._server_socket:
                 self._server_socket.close()
     
+    @property
+    def full_duplex(self) -> bool:
+        """Override to True for async protocols like MQTT that need
+        bidirectional forwarding (broker can push at any time)."""
+        return False
+
     def _handle_connection(self, client_sock: socket.socket, client_addr: Tuple[str, int], session_id: str):
         """Handle a single client connection - proxy traffic and log"""
+        if self.full_duplex:
+            return self._handle_connection_full_duplex(client_sock, client_addr, session_id)
         backend_sock = None
         
         try:
@@ -255,6 +263,87 @@ class BaseProxy(ABC):
             self.logger.close_session(session_id)
             self._cleanup_session(session_id)  # Hook for subclass cleanup
     
+    def _handle_connection_full_duplex(self, client_sock: socket.socket, client_addr: Tuple[str, int], session_id: str):
+        """Handle connection with bidirectional forwarding (two threads).
+
+        Used by async protocols like MQTT where the backend can push
+        messages at any time, not just in response to a client request.
+        """
+        backend_sock = None
+
+        try:
+            backend_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            backend_sock.settimeout(self.config.timeout)
+            backend_sock.connect((self.config.backend_host, self.config.backend_port))
+            client_sock.settimeout(self.config.timeout)
+
+            session = self.logger.get_or_create_session(session_id)
+            stop_event = threading.Event()
+
+            def forward(src, dst, direction):
+                """Forward data between sockets.
+                direction: 'request' (client→backend) or 'response' (backend→client)
+                """
+                try:
+                    while self._running and not stop_event.is_set():
+                        try:
+                            data = src.recv(self.config.buffer_size)
+                            if not data:
+                                break
+                        except socket.timeout:
+                            continue
+                        except Exception:
+                            break
+
+                        # Parse and log
+                        if direction == "request":
+                            parsed = self.parse_request(data, session_id)
+                            self._log_traffic(
+                                client_addr=client_addr,
+                                request_data=data,
+                                response_data=b"",
+                                request_context=parsed,
+                                response_context={},
+                                session=session,
+                            )
+                        else:
+                            parsed = self.parse_response(data)
+                            self._log_traffic(
+                                client_addr=client_addr,
+                                request_data=b"",
+                                response_data=data,
+                                request_context={},
+                                response_context=parsed,
+                                session=session,
+                            )
+
+                        # Forward
+                        try:
+                            dst.sendall(data)
+                        except Exception:
+                            break
+                finally:
+                    stop_event.set()
+
+            t_c2b = threading.Thread(target=forward, args=(client_sock, backend_sock, "request"), daemon=True)
+            t_b2c = threading.Thread(target=forward, args=(backend_sock, client_sock, "response"), daemon=True)
+            t_c2b.start()
+            t_b2c.start()
+
+            # Block until either direction closes
+            stop_event.wait()
+            t_c2b.join(timeout=3)
+            t_b2c.join(timeout=3)
+
+        except Exception as e:
+            print(f"[{self.config.protocol.upper()} Proxy] Connection error from {client_addr}: {e}")
+        finally:
+            if backend_sock:
+                backend_sock.close()
+            client_sock.close()
+            self.logger.close_session(session_id)
+            self._cleanup_session(session_id)
+
     def _cleanup_session(self, session_id: str):
         """
         Hook for subclasses to clean up session-specific data.
