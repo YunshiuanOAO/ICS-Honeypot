@@ -19,6 +19,11 @@ from pathlib import Path
 from datetime import datetime
 from database import ServerDB
 from auth_config import load_secrets, verify_password, verify_api_key
+from package_generators import (
+    SUPPORTED_PROTOCOLS,
+    PackageGenerationError,
+    generate_package,
+)
 
 # Resolve paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -827,6 +832,61 @@ async def import_package_zip(archive: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Invalid zip archive: {exc}")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/import_package_json", dependencies=[Depends(require_session)])
+async def import_package_json(
+    config: UploadFile = File(...),
+    protocol: str = Form(...),
+    name: str = Form(""),
+):
+    """
+    Generate a deployable honeypot package from a single JSON config file.
+
+    The user uploads only the data (e.g. register map for modbus, or a
+    streetlight command_response_map for mqtt) and selects a protocol.
+    The server fills in the Dockerfile, compose file, and simulator script.
+    """
+    proto = (protocol or "").strip().lower()
+    if proto not in SUPPORTED_PROTOCOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported protocol '{protocol}'. Choose one of: {', '.join(SUPPORTED_PROTOCOLS)}",
+        )
+
+    raw = await config.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Config file is empty")
+
+    try:
+        config_data = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Config file must be UTF-8 encoded")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
+
+    package_name = (name or "").strip() or Path(config.filename or f"{proto}-from-json").stem
+
+    try:
+        generated = generate_package(proto, config_data, package_name)
+    except PackageGenerationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    library_package = _save_package_to_library(
+        name=package_name,
+        source_dir=generated["source_dir"],
+        files=generated["files"],
+        archive_name=config.filename or f"{proto}-from-json.json",
+    )
+
+    return {
+        "status": "ok",
+        "protocol": generated["protocol"],
+        "source_dir": library_package["source_dir"],
+        "files": library_package["files"],
+        "package_id": library_package["id"],
+        "package_name": library_package["name"],
+    }
 
 
 @app.get("/api/package_library", dependencies=[Depends(require_session)])
