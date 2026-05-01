@@ -258,6 +258,7 @@ class NodeAgent:
                 # Treat non-200 as a failure
                 self._heartbeat_consecutive_failures += 1
                 print(f"[{self.node_id}] Heartbeat to {url} returned status {response.status_code}: {response.text[:200]} ({self._heartbeat_consecutive_failures}/{self._max_heartbeat_failures})")
+                self._maybe_safety_stop()
                 return
             
             # Reset failure counter on successful heartbeat
@@ -322,13 +323,15 @@ class NodeAgent:
         except Exception as exc:
             self._heartbeat_consecutive_failures += 1
             print(f"[{self.node_id}] Heartbeat error ({self._heartbeat_consecutive_failures}/{self._max_heartbeat_failures}): {exc}")
-            
-            # Only stop services after multiple consecutive failures
-            if self._heartbeat_consecutive_failures >= self._max_heartbeat_failures:
-                if self._has_running_services():
-                    print(f"[{self.node_id}] Multiple heartbeat failures. Safety stop.")
-                    self._stop_all_services()
-                    self._heartbeat_consecutive_failures = 0  # Reset after stopping
+            self._maybe_safety_stop()
+
+    def _maybe_safety_stop(self):
+        if self._heartbeat_consecutive_failures < self._max_heartbeat_failures:
+            return
+        if self._has_running_services():
+            print(f"[{self.node_id}] Multiple heartbeat failures. Safety stop.")
+            self._stop_all_services()
+        self._heartbeat_consecutive_failures = 0
 
     def _collect_container_logs(self):
         """Collect logs from container log files (legacy method)"""
