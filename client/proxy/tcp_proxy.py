@@ -74,7 +74,7 @@ class TCPProxy(BaseProxy):
         printable_count = sum(1 for b in data if 32 <= b <= 126 or b in (9, 10, 13))
         return (printable_count / len(data)) >= threshold
     
-    def _get_printable_preview(self, data: bytes, max_length: int = 100) -> str:
+    def _get_printable_preview(self, data: bytes, max_length: int = 1024) -> str:
         """Get printable preview of data"""
         if not data:
             return ""
