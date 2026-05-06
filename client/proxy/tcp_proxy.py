@@ -11,13 +11,13 @@ from .unified_logger import UnifiedLogger, ProtocolInfo
 class TCPProxy(BaseProxy):
     """
     Generic TCP proxy that captures all traffic without protocol parsing.
-    
+
     Use cases:
     - Unknown protocols
     - Raw traffic capture
     - Quick deployment without protocol analysis
     - Fallback when no specific proxy is available
-    
+
     Example:
         config = ProxyConfig(
             listen_port=5020,
@@ -31,6 +31,13 @@ class TCPProxy(BaseProxy):
         proxy = TCPProxy(config, logger)
         proxy.start()
     """
+
+    @property
+    def full_duplex(self) -> bool:
+        # Mongo / Postgres / Redis 等多包回應或 server-push 協定,單回合 recv() 會在
+        # 第 4096 byte 截斷後 deadlock(client 等剩下的 bytes,proxy 等下一個 client request)。
+        # 預設打開全雙工;若需要舊式 request-response 配對 logging 把 extra_config 設 false。
+        return bool(self.config.extra_config.get("full_duplex", True))
     
     def parse_request(self, data: bytes, session_id: str = "") -> dict:
         """
