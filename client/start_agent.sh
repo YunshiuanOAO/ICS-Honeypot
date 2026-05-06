@@ -37,22 +37,82 @@ _agent_running() {
     [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
+# Find any agent PID, even if the PID file is missing/stale.
+# The agent doesn't bind a fixed port (proxy listen ports are dynamic), so we
+# discover by cmdline match. cwd filtering avoids killing unrelated python3
+# main.py processes; if /proc/<pid>/cwd is unreadable (e.g. agent was started
+# with sudo) accept the match anyway — otherwise we silently miss it.
+_discover_agent_pids() {
+    local pids=""
+    local cand
+    cand="$(pgrep -f 'python3? .*main\.py' 2>/dev/null || true)"
+    for p in $cand; do
+        local cwd
+        cwd="$(readlink -f /proc/$p/cwd 2>/dev/null || echo unreadable)"
+        if [ "$cwd" = "$SCRIPT_DIR" ] || [ "$cwd" = "unreadable" ]; then
+            pids="$pids $p"
+        fi
+    done
+    echo "$pids" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' '
+}
+
+# SIGTERM the agent so its shutdown handler runs (stops proxies + docker
+# containers gracefully). Falls back to sudo if started with elevated
+# privileges, then SIGKILL as last resort.
+_kill_pids() {
+    local pids="$1"
+    [ -z "$pids" ] && return 0
+    info "Stopping agent PIDs:$pids"
+
+    kill $pids 2>/dev/null || true
+
+    # Give the agent up to 15s to run its graceful shutdown.
+    for i in $(seq 1 15); do
+        local alive=""
+        for p in $pids; do
+            kill -0 "$p" 2>/dev/null && alive="$alive $p"
+        done
+        [ -z "$alive" ] && return 0
+        sleep 1
+    done
+
+    local need_sudo=""
+    for p in $pids; do
+        kill -0 "$p" 2>/dev/null && need_sudo="$need_sudo $p"
+    done
+    if [ -n "$need_sudo" ] && command -v sudo &> /dev/null; then
+        warn "Some processes need elevated privileges:$need_sudo"
+        sudo kill $need_sudo 2>/dev/null || true
+        sleep 3
+    fi
+
+    kill -9 $pids 2>/dev/null || true
+    if command -v sudo &> /dev/null; then
+        sudo kill -9 $pids 2>/dev/null || true
+    fi
+}
+
 case "${1:-}" in
     stop)
+        STOPPED_ANY=false
         if _agent_running; then
             PID=$(cat "$PID_FILE")
-            info "Stopping agent (PID $PID)..."
-            kill "$PID" 2>/dev/null || true
-            for i in $(seq 1 10); do
-                kill -0 "$PID" 2>/dev/null || break
-                sleep 1
-            done
-            kill -9 "$PID" 2>/dev/null || true
-            rm -f "$PID_FILE"
+            _kill_pids "$PID"
+            STOPPED_ANY=true
+        fi
+        rm -f "$PID_FILE"
+
+        DISCOVERED="$(_discover_agent_pids | xargs)"
+        if [ -n "$DISCOVERED" ]; then
+            warn "Found additional agent processes outside PID file: $DISCOVERED"
+            _kill_pids "$DISCOVERED"
+            STOPPED_ANY=true
+        fi
+
+        if $STOPPED_ANY; then
             ok "Agent stopped."
         else
             warn "Agent is not running."
-            rm -f "$PID_FILE"
         fi
         exit 0
         ;;
@@ -61,8 +121,14 @@ case "${1:-}" in
             PID=$(cat "$PID_FILE")
             ok "Agent is running (PID $PID)"
         else
-            warn "Agent is not running."
-            rm -f "$PID_FILE"
+            DISCOVERED="$(_discover_agent_pids | xargs)"
+            if [ -n "$DISCOVERED" ]; then
+                warn "Agent is running but PID file is stale: $DISCOVERED"
+                warn "Run '$0 stop' to clean up."
+            else
+                warn "Agent is not running."
+                rm -f "$PID_FILE"
+            fi
         fi
         exit 0
         ;;
