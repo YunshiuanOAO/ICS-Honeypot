@@ -73,20 +73,47 @@ class DockerDeploymentManager:
         candidates = [name for name in os.listdir(package_root) if os.path.isdir(os.path.join(package_root, name))]
         return candidates[0] if candidates else None
 
+    # Runtime directories that containers commonly bind-mount into the
+    # package tree (mongo data, app logs, db files...). They aren't part of
+    # the deployment definition, change constantly while the container runs,
+    # and contain binary data — so we skip them when re-reading the package.
+    _RUNTIME_DIR_NAMES = {"data", "logs", "db", "node_modules", ".git", "__pycache__"}
+
     def _read_local_files(self, source_root):
         files = []
         if not os.path.isdir(source_root):
             return files
-        for root, _, filenames in os.walk(source_root):
+
+        for root, dirnames, filenames in os.walk(source_root):
+            # Prune runtime/cache directories in-place so os.walk doesn't recurse.
+            dirnames[:] = [d for d in dirnames if d not in self._RUNTIME_DIR_NAMES]
+
             for filename in sorted(filenames):
                 if filename in {".env", ".env.runtime", "docker-compose.override.generated.yml"}:
                     continue
+
                 absolute_path = os.path.join(root, filename)
                 relative_path = os.path.relpath(absolute_path, source_root).replace("\\", "/")
+
                 try:
-                    content = open(absolute_path, "r", encoding="utf-8").read()
+                    with open(absolute_path, "rb") as handle:
+                        raw = handle.read()
+                except FileNotFoundError:
+                    # File disappeared mid-walk (e.g. container's transient files).
+                    continue
+                except OSError:
+                    # Unreadable for any other reason — skip rather than crash.
+                    continue
+
+                # Skip obvious binary content; the package only contains source/config.
+                if b"\x00" in raw:
+                    continue
+                try:
+                    content = raw.decode("utf-8")
                 except UnicodeDecodeError:
-                    content = open(absolute_path, "r", encoding="utf-8", errors="replace").read()
+                    # Not text — skip rather than upload corrupted content.
+                    continue
+
                 files.append({"path": relative_path, "content": content})
         return files
 
