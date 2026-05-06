@@ -1004,54 +1004,63 @@ async def recent_whitelist_logs(limit: int = 100, node_id: Optional[str] = None)
     return logs
 
 def validate_config_proxy_settings(config: Dict[str, Any]) -> tuple[bool, str]:
-    """
-    Validate proxy configuration in the config object.
-    Returns (is_valid, error_message)
+    """Validate proxy config across all deployments.
+
+    Each deployment may carry either a legacy ``proxy`` dict or a ``proxies``
+    list. Every enabled proxy must have unique listen and backend ports across
+    the entire agent.
     """
     if not isinstance(config.get("deployments"), list):
-        return True, ""  # No deployments is ok
-    
-    deployment_ports = {}
+        return True, ""
+
+    used_ports: Dict[int, str] = {}
     errors = []
-    
+
     for dep in config["deployments"]:
         if not dep.get("enabled", True):
             continue
-        
-        proxy = dep.get("proxy")
-        if not proxy or not proxy.get("enabled"):
-            continue
-        
+
         dep_name = dep.get("name", dep.get("id", "unknown"))
-        listen_port = proxy.get("listen_port")
-        backend_port = proxy.get("backend_port")
-        
-        # Check if ports are configured
-        if not listen_port or not backend_port:
-            errors.append(f'Deployment "{dep_name}": Proxy enabled but ports not configured')
-            continue
-        
-        # Check port ranges
-        if not (1 <= listen_port <= 65535):
-            errors.append(f'Deployment "{dep_name}": Invalid listen port {listen_port}')
-        if not (1 <= backend_port <= 65535):
-            errors.append(f'Deployment "{dep_name}": Invalid backend port {backend_port}')
-        
-        # Check for port conflicts
-        if listen_port in deployment_ports:
-            other_dep = deployment_ports[listen_port]
-            errors.append(f'Port conflict: Listen port {listen_port} used by "{dep_name}" and "{other_dep}"')
-        
-        if backend_port in deployment_ports:
-            other_dep = deployment_ports[backend_port]
-            errors.append(f'Port conflict: Backend port {backend_port} used by "{dep_name}" and "{other_dep}"')
-        
-        deployment_ports[listen_port] = dep_name
-        deployment_ports[backend_port] = dep_name
-    
+
+        proxies = dep.get("proxies")
+        if not isinstance(proxies, list):
+            legacy = dep.get("proxy")
+            proxies = [legacy] if isinstance(legacy, dict) else []
+
+        names_seen = set()
+        for index, proxy in enumerate(proxies):
+            if not isinstance(proxy, dict) or not proxy.get("enabled"):
+                continue
+
+            proxy_name = str(proxy.get("name") or f"proxy-{index + 1}")
+            label = f'"{dep_name}" / proxy "{proxy_name}"'
+
+            if proxy_name in names_seen:
+                errors.append(f'{label}: duplicate proxy name within deployment')
+            names_seen.add(proxy_name)
+
+            listen_port = proxy.get("listen_port")
+            backend_port = proxy.get("backend_port")
+
+            if not listen_port or not backend_port:
+                errors.append(f'{label}: Proxy enabled but ports not configured')
+                continue
+
+            if not (1 <= int(listen_port) <= 65535):
+                errors.append(f'{label}: Invalid listen port {listen_port}')
+            if not (1 <= int(backend_port) <= 65535):
+                errors.append(f'{label}: Invalid backend port {backend_port}')
+
+            if listen_port in used_ports:
+                errors.append(f'Port conflict: Listen port {listen_port} used by {label} and {used_ports[listen_port]}')
+            if backend_port in used_ports:
+                errors.append(f'Port conflict: Backend port {backend_port} used by {label} and {used_ports[backend_port]}')
+
+            used_ports[listen_port] = label
+            used_ports[backend_port] = label
+
     if errors:
         return False, "; ".join(errors)
-    
     return True, ""
 
 

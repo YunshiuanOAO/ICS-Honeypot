@@ -38,6 +38,36 @@ function escapeHtml(text) {
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
+// Normalize a deployment's proxy field(s) into a list. Accepts the new
+// `proxies` array, the legacy `proxy` dict, or neither.
+function normalizeProxies(deployment) {
+    let raw = deployment && deployment.proxies;
+    if (!Array.isArray(raw) || !raw.length) {
+        if (deployment && deployment.proxy) {
+            raw = [deployment.proxy];
+        } else {
+            raw = [];
+        }
+    }
+    const seen = new Set();
+    return raw.map((p, i) => {
+        const proxy = clone(p || {});
+        let name = (proxy.name || proxy.protocol || `proxy-${i + 1}`)
+            .toString()
+            .replace(/[^a-zA-Z0-9_-]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .toLowerCase() || `proxy-${i + 1}`;
+        let candidate = name;
+        let suffix = 2;
+        while (seen.has(candidate)) {
+            candidate = `${name}-${suffix++}`;
+        }
+        seen.add(candidate);
+        proxy.name = candidate;
+        return proxy;
+    });
+}
+
 async function loadPackageLibrary() {
     try {
         PACKAGE_LIBRARY = await fetch(`${API_BASE}/package_library`).then(r => r.json());
@@ -67,7 +97,7 @@ async function loadConfig() {
                 enabled: d.enabled !== false,
                 source_dir: d.source_dir || d.id || `deployment-${i + 1}`,
                 log_paths: Array.isArray(d.log_paths) ? clone(d.log_paths) : [],
-                proxy: d.proxy ? clone(d.proxy) : undefined,
+                proxies: normalizeProxies(d),
                 files: Array.isArray(d.files) ? clone(d.files) : [],
                 library_package_id: d.library_package_id || "",
                 library_package_name: d.library_package_name || "",
@@ -401,11 +431,9 @@ function renderMainEditor() {
         
         if (!deployment) { selectView('agent-settings'); return; }
         
-        const proxyEnabled = deployment.proxy?.enabled ?? false;
-        const proxyProtocol = deployment.proxy?.protocol ?? 'tcp';
-        const proxyListenPort = deployment.proxy?.listen_port ?? '';
-        const proxyBackendPort = deployment.proxy?.backend_port ?? '';
-        
+        if (!Array.isArray(deployment.proxies)) deployment.proxies = [];
+        const proxiesHtml = deployment.proxies.map((p, idx) => renderProxyEditor(id, p, idx)).join('');
+
         header.innerHTML = `Deployments / ${escapeHtml(deployment.name)}`;
         content.innerHTML = `
             <div class="settings-form">
@@ -431,60 +459,17 @@ function renderMainEditor() {
                 </div>
                 
                 <div style="margin: 2rem 0; padding: 1.5rem; background: rgba(6, 182, 212, 0.08); border-left: 3px solid var(--accent); border-radius: 8px;">
-                    <h4 style="margin-top:0; margin-bottom:1rem; color: var(--accent-light);">Protocol & Traffic Proxy</h4>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Enable Proxy for Traffic Capture</label>
-                            <select onchange="updateDeploymentProxy('${id}', 'enabled', this.value === 'true')">
-                                <option value="false" ${!proxyEnabled ? 'selected' : ''}>Disabled (No Proxy)</option>
-                                <option value="true" ${proxyEnabled ? 'selected' : ''}>Enabled (Proxy Traffic)</option>
-                            </select>
-                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                Enable to intercept and log protocol-level traffic details
-                            </small>
-                        </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                        <h4 style="margin:0; color: var(--accent-light);">Protocol & Traffic Proxies</h4>
+                        <button class="btn btn-secondary" type="button" onclick="addProxy('${id}')">
+                            <i data-lucide="plus"></i>
+                            <span>Add Proxy</span>
+                        </button>
                     </div>
-                    
-                    ${proxyEnabled ? `
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Protocol Type</label>
-                            <select onchange="updateDeploymentProxy('${id}', 'protocol', this.value)">
-                                <option value="tcp" ${proxyProtocol === 'tcp' ? 'selected' : ''}>TCP (Generic)</option>
-                                <option value="modbus" ${proxyProtocol === 'modbus' ? 'selected' : ''}>Modbus TCP</option>
-                                <option value="http" ${proxyProtocol === 'http' ? 'selected' : ''}>HTTP/HTTPS</option>
-                                <option value="mqtt" ${proxyProtocol === 'mqtt' ? 'selected' : ''}>MQTT</option>
-                                <option value="s7comm" ${proxyProtocol === 's7comm' ? 'selected' : ''}>S7 Communication</option>
-                                <option value="dnp3" ${proxyProtocol === 'dnp3' ? 'selected' : ''}>DNP3</option>
-                            </select>
-                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                Select the protocol to enable intelligent parsing and logging
-                            </small>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Proxy Listen Port</label>
-                            <input type="number" min="1" max="65535" value="${escapeHtml(proxyListenPort)}" 
-                                   onchange="updateDeploymentProxy('${id}', 'listen_port', parseInt(this.value) || 0)"
-                                   placeholder="e.g., 5020">
-                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                Port on this agent to listen for incoming traffic
-                            </small>
-                        </div>
-                        <div class="form-group">
-                            <label>Backend Container Port</label>
-                            <input type="number" min="1" max="65535" value="${escapeHtml(proxyBackendPort)}" 
-                                   onchange="updateDeploymentProxy('${id}', 'backend_port', parseInt(this.value) || 0)"
-                                   placeholder="e.g., 15020">
-                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                Port where the honeypot container listens
-                            </small>
-                        </div>
-                    </div>
-                    ` : ''}
+                    <p style="color: var(--text-secondary); font-size: 13px; margin: 0 0 1rem;">
+                        Define one proxy per port the service exposes. Each proxy listens on the agent and forwards to the container's backend port.
+                    </p>
+                    ${proxiesHtml || `<div style="color: var(--text-muted); padding: 1rem; text-align:center;">No proxies configured. Click "Add Proxy" to capture traffic for a port.</div>`}
                 </div>
                 
                 <div class="form-group">
@@ -528,6 +513,11 @@ function renderMainEditor() {
             <textarea class="code-textarea" onchange="updateFileContent('${deploymentId}', ${fileIndex}, this.value)">${escapeHtml(file.content)}</textarea>
         `;
     }
+
+    // Replace any <i data-lucide="..."> placeholders the editor just rendered.
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
 }
 
 // Update helpers
@@ -543,13 +533,109 @@ function updateDeploymentLogPaths(id, val) {
     const d = agentConfig.deployments.find(x => x.id === id);
     if(d) d.log_paths = val.split('\n').map(l => l.trim()).filter(Boolean);
 }
-function updateDeploymentProxy(id, field, value) {
-    const d = agentConfig.deployments.find(x => x.id === id);
-    if(d) {
-        if (!d.proxy) d.proxy = {};
-        d.proxy[field] = value;
-        renderMainEditor(); // Re-render to show/hide conditional fields
-    }
+function renderProxyEditor(deploymentId, proxy, index) {
+    const enabled = proxy.enabled !== false;
+    const protocol = proxy.protocol || 'tcp';
+    const listenPort = proxy.listen_port ?? '';
+    const backendPort = proxy.backend_port ?? '';
+    const containerPort = proxy.container_port ?? '';
+    const name = proxy.name || `proxy-${index + 1}`;
+
+    return `
+        <div style="border:1px solid var(--border); border-radius:8px; padding:1rem 1.25rem; margin-bottom:1rem; background: rgba(0,0,0,0.15);">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; margin-bottom:0.75rem;">
+                <strong style="color: var(--accent-light);">Proxy #${index + 1} <span style="opacity:0.6; font-weight:normal;">(${escapeHtml(name)})</span></strong>
+                <button class="btn btn-danger" type="button" onclick="removeProxy('${deploymentId}', ${index})" title="Remove proxy">
+                    <i data-lucide="trash-2"></i>
+                </button>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Name (unique)</label>
+                    <input type="text" value="${escapeHtml(name)}"
+                           onchange="updateProxy('${deploymentId}', ${index}, 'name', this.value)"
+                           placeholder="e.g. modbus or http">
+                </div>
+                <div class="form-group">
+                    <label>Enabled</label>
+                    <select onchange="updateProxy('${deploymentId}', ${index}, 'enabled', this.value === 'true')">
+                        <option value="false" ${!enabled ? 'selected' : ''}>Disabled</option>
+                        <option value="true" ${enabled ? 'selected' : ''}>Enabled</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Protocol</label>
+                    <select onchange="updateProxy('${deploymentId}', ${index}, 'protocol', this.value)">
+                        <option value="tcp" ${protocol === 'tcp' ? 'selected' : ''}>TCP (Generic)</option>
+                        <option value="modbus" ${protocol === 'modbus' ? 'selected' : ''}>Modbus TCP</option>
+                        <option value="http" ${protocol === 'http' ? 'selected' : ''}>HTTP/HTTPS</option>
+                        <option value="mqtt" ${protocol === 'mqtt' ? 'selected' : ''}>MQTT</option>
+                        <option value="s7comm" ${protocol === 's7comm' ? 'selected' : ''}>S7 Communication</option>
+                        <option value="dnp3" ${protocol === 'dnp3' ? 'selected' : ''}>DNP3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Listen Port (agent)</label>
+                    <input type="number" min="1" max="65535" value="${escapeHtml(listenPort)}"
+                           onchange="updateProxy('${deploymentId}', ${index}, 'listen_port', parseInt(this.value) || 0)"
+                           placeholder="e.g. 502">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Backend Port (host->container)</label>
+                    <input type="number" min="1" max="65535" value="${escapeHtml(backendPort)}"
+                           onchange="updateProxy('${deploymentId}', ${index}, 'backend_port', parseInt(this.value) || 0)"
+                           placeholder="e.g. 15020">
+                    <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                        Available in compose as <code>$BACKEND_PORT_${escapeHtml((name||'').toUpperCase().replace(/[^A-Z0-9]/g,'_'))}</code>.
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label>Container Port (optional)</label>
+                    <input type="number" min="1" max="65535" value="${escapeHtml(containerPort)}"
+                           onchange="updateProxy('${deploymentId}', ${index}, 'container_port', parseInt(this.value) || 0)"
+                           placeholder="defaults to listen port">
+                    <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                        Used for Dockerfile-mode port mapping. Defaults to listen port.
+                    </small>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function addProxy(deploymentId) {
+    const d = agentConfig.deployments.find(x => x.id === deploymentId);
+    if (!d) return;
+    if (!Array.isArray(d.proxies)) d.proxies = [];
+    const idx = d.proxies.length + 1;
+    d.proxies.push({
+        name: `proxy-${idx}`,
+        enabled: true,
+        protocol: 'tcp',
+        listen_port: 0,
+        backend_port: 0
+    });
+    renderMainEditor();
+}
+
+function removeProxy(deploymentId, index) {
+    const d = agentConfig.deployments.find(x => x.id === deploymentId);
+    if (!d || !Array.isArray(d.proxies) || index < 0 || index >= d.proxies.length) return;
+    if (!confirm("Remove this proxy?")) return;
+    d.proxies.splice(index, 1);
+    renderMainEditor();
+}
+
+function updateProxy(deploymentId, index, field, value) {
+    const d = agentConfig.deployments.find(x => x.id === deploymentId);
+    if (!d || !Array.isArray(d.proxies) || !d.proxies[index]) return;
+    d.proxies[index][field] = value;
+    // Re-render only on changes that affect the visible labels (name)
+    if (field === 'name') renderMainEditor();
 }
 function updateFilePath(depId, idx, path) {
     const d = agentConfig.deployments.find(x => x.id === depId);
@@ -562,59 +648,56 @@ function updateFileContent(depId, idx, content) {
 
 // Validate configuration before saving
 function validateConfig() {
-    if (!agentConfig) return true; // Empty config is ok
-    
+    if (!agentConfig) return true;
+
     const errors = [];
-    const deploymentPorts = {};
-    
-    // Check each deployment
+    const usedPorts = {};
+
     for (const dep of agentConfig.deployments) {
         if (!dep.enabled) continue;
-        
-        const proxy = dep.proxy;
-        if (!proxy || !proxy.enabled) continue;
-        
-        // Check if listen_port and backend_port are configured
-        const listenPort = proxy.listen_port;
-        const backendPort = proxy.backend_port;
-        
-        if (!listenPort || !backendPort) {
-            errors.push(`Deployment "${dep.name}": Proxy enabled but ports not configured`);
-            continue;
+        const proxies = Array.isArray(dep.proxies) ? dep.proxies : [];
+        const namesSeen = new Set();
+
+        for (let idx = 0; idx < proxies.length; idx++) {
+            const proxy = proxies[idx];
+            if (!proxy || !proxy.enabled) continue;
+
+            const proxyName = proxy.name || `proxy-${idx + 1}`;
+            const label = `"${dep.name}" / proxy "${proxyName}"`;
+
+            if (namesSeen.has(proxyName)) {
+                errors.push(`${label}: duplicate proxy name within deployment`);
+            }
+            namesSeen.add(proxyName);
+
+            const listenPort = proxy.listen_port;
+            const backendPort = proxy.backend_port;
+
+            if (!listenPort || !backendPort) {
+                errors.push(`${label}: Proxy enabled but ports not configured`);
+                continue;
+            }
+            if (listenPort < 1 || listenPort > 65535) {
+                errors.push(`${label}: Invalid listen port ${listenPort}`);
+            }
+            if (backendPort < 1 || backendPort > 65535) {
+                errors.push(`${label}: Invalid backend port ${backendPort}`);
+            }
+            if (usedPorts[listenPort]) {
+                errors.push(`Port conflict: Listen port ${listenPort} used by ${label} and ${usedPorts[listenPort]}`);
+            }
+            if (usedPorts[backendPort]) {
+                errors.push(`Port conflict: Backend port ${backendPort} used by ${label} and ${usedPorts[backendPort]}`);
+            }
+            usedPorts[listenPort] = label;
+            usedPorts[backendPort] = label;
         }
-        
-        // Check for port conflicts
-        if (deploymentPorts[listenPort]) {
-            errors.push(`Port conflict: Listen port ${listenPort} is used by both "${dep.name}" and "${deploymentPorts[listenPort]}"`);
-        }
-        
-        if (deploymentPorts[backendPort]) {
-            errors.push(`Port conflict: Backend port ${backendPort} is used by both "${dep.name}" and "${deploymentPorts[backendPort]}"`);
-        }
-        
-        // Validate port ranges
-        if (listenPort < 1 || listenPort > 65535) {
-            errors.push(`Deployment "${dep.name}": Invalid listen port ${listenPort} (must be 1-65535)`);
-        }
-        
-        if (backendPort < 1 || backendPort > 65535) {
-            errors.push(`Deployment "${dep.name}": Invalid backend port ${backendPort} (must be 1-65535)`);
-        }
-        
-        // Warn if using privileged ports without explanation
-        if (listenPort < 1024) {
-            console.warn(`Deployment "${dep.name}": Using privileged port ${listenPort} (requires root/sudo)`);
-        }
-        
-        deploymentPorts[listenPort] = dep.name;
-        deploymentPorts[backendPort] = dep.name;
     }
-    
+
     if (errors.length > 0) {
         Toast.error(errors.join("\n"));
         return false;
     }
-    
     return true;
 }
 

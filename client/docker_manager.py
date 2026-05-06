@@ -143,19 +143,38 @@ class DockerDeploymentManager:
             "-v", f"{self._data_root(deployment)}:/honeypot/data",
         ]
 
-        # Check if proxy is configured - if so, use backend_port for host mapping
-        proxy_config = deployment.get("proxy", {})
-        backend_port = proxy_config.get("backend_port")
-        
-        # Reserved ports that should not be auto-mapped (e.g., server port)
-        reserved_ports = {8000}  # FastAPI server port
-        
+        proxies = self._normalized_proxies(deployment)
+        # Build {container_port: backend_port} mapping from proxies. If a proxy
+        # entry omits container_port, fall back to listen_port (the host-facing
+        # port a single-port service usually re-uses inside the container).
+        container_port_map = {}
+        for proxy_cfg in proxies:
+            if not proxy_cfg.get("enabled", True):
+                continue
+            backend_port = proxy_cfg.get("backend_port")
+            if not backend_port:
+                continue
+            cp = proxy_cfg.get("container_port") or proxy_cfg.get("listen_port")
+            if not cp:
+                continue
+            container_port_map[int(cp)] = int(backend_port)
+
+        # Legacy single-proxy fallback: one backend_port that maps every
+        # EXPOSE'd port. Kept for configs created before multi-proxy.
+        legacy_backend_port = None
+        if not container_port_map:
+            legacy = deployment.get("proxy") or {}
+            legacy_backend_port = legacy.get("backend_port")
+
+        reserved_ports = {8000}
+
         for port in self._infer_exposed_ports(deployment):
-            if backend_port:
-                # Use proxy's backend_port for host mapping
-                command.extend(["-p", f"{backend_port}:{port}"])
-            elif int(port) in reserved_ports:
-                # Skip reserved ports - don't auto-map them
+            port_int = int(port)
+            if port_int in container_port_map:
+                command.extend(["-p", f"{container_port_map[port_int]}:{port}"])
+            elif legacy_backend_port:
+                command.extend(["-p", f"{legacy_backend_port}:{port}"])
+            elif port_int in reserved_ports:
                 print(f"[DockerManager] Skipping reserved port {port} for {deployment.get('id')}")
                 continue
             else:
@@ -163,6 +182,17 @@ class DockerDeploymentManager:
 
         command.append(image_name)
         return self._run(command, cwd=source_root)
+
+    def _normalized_proxies(self, deployment):
+        proxies = deployment.get("proxies")
+        if isinstance(proxies, list) and proxies:
+            return proxies
+        legacy = deployment.get("proxy")
+        if isinstance(legacy, dict):
+            entry = dict(legacy)
+            entry.setdefault("name", "default")
+            return [entry]
+        return []
 
     def _compose_files_args(self, deployment):
         args = ["-f", self._compose_path(deployment)]
@@ -442,12 +472,23 @@ class DockerDeploymentManager:
         with open(env_path, "w", encoding="utf-8") as handle:
             handle.write(f"HONEYPOT_DATA_DIR={self._data_root(deployment)}\n")
             handle.write(f"HONEYPOT_LOGS_DIR={self._logs_root(deployment)}\n")
-            
-            # Add proxy backend port if configured
-            proxy_config = deployment.get("proxy", {})
-            backend_port = proxy_config.get("backend_port")
-            if backend_port:
-                handle.write(f"BACKEND_PORT={backend_port}\n")
+
+            # Write one env var per proxy as BACKEND_PORT_<NAME>. When there
+            # is exactly one proxy we also write the bare BACKEND_PORT for
+            # backwards compatibility with single-port compose files.
+            proxies = self._normalized_proxies(deployment)
+            enabled = [p for p in proxies if p.get("enabled", True) and p.get("backend_port")]
+            for proxy_cfg in enabled:
+                name = str(proxy_cfg.get("name") or "default")
+                env_name = re.sub(r"[^A-Z0-9]", "_", name.upper()).strip("_") or "DEFAULT"
+                handle.write(f"BACKEND_PORT_{env_name}={proxy_cfg['backend_port']}\n")
+            if len(enabled) == 1:
+                handle.write(f"BACKEND_PORT={enabled[0]['backend_port']}\n")
+            elif not enabled:
+                # Pre-multi-proxy single-proxy config still uses BACKEND_PORT.
+                legacy_port = (deployment.get("proxy") or {}).get("backend_port")
+                if legacy_port:
+                    handle.write(f"BACKEND_PORT={legacy_port}\n")
 
     def _update_single_status(self, deployment, compose_result=None):
         deployment_id = deployment["id"]

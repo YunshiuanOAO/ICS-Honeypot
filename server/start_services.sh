@@ -37,23 +37,122 @@ _server_running() {
     [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
+# Find any server PID, even if the PID file is missing/stale.
+# Combines: (a) listeners on port 8000 (via lsof / fuser / ss) and
+# (b) python processes whose cmdline mentions main.py *and* whose cwd is
+# this server directory. Works for daemon, foreground, and manual launches.
+_discover_server_pids() {
+    local pids=""
+
+    # (a) Port 8000 listeners
+    if command -v lsof &> /dev/null; then
+        pids="$pids $(lsof -ti :8000 2>/dev/null || true)"
+    fi
+    if command -v fuser &> /dev/null; then
+        pids="$pids $(fuser 8000/tcp 2>/dev/null || true)"
+    fi
+    if command -v ss &> /dev/null; then
+        # ss "users:((\"python3\",pid=720027,fd=3))" -> extract pid=NNN
+        pids="$pids $(ss -ltnp 2>/dev/null | awk '$4 ~ /:8000$/' | grep -oE 'pid=[0-9]+' | cut -d= -f2 || true)"
+    fi
+
+    # (b) python processes running main.py. We try to filter by cwd =
+    # SCRIPT_DIR, but if /proc/<pid>/cwd is unreadable (e.g. root-owned
+    # server, current user is not root) we accept the match anyway —
+    # the alternative is missing the very server we're trying to stop.
+    local cand
+    cand="$(pgrep -f 'python3? .*main\.py' 2>/dev/null || true)"
+    for p in $cand; do
+        local cwd
+        cwd="$(readlink -f /proc/$p/cwd 2>/dev/null || echo unreadable)"
+        if [ "$cwd" = "$SCRIPT_DIR" ] || [ "$cwd" = "unreadable" ]; then
+            pids="$pids $p"
+        fi
+    done
+
+    # Dedupe + strip whitespace; only keep numeric PIDs
+    echo "$pids" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' '
+}
+
+_kill_pids() {
+    local pids="$1"
+    [ -z "$pids" ] && return 0
+    info "Stopping server PIDs:$pids"
+
+    # Try without sudo first; if any PID still alive afterwards and we lack
+    # permission, retry with sudo. Servers started via 'sudo ./start_services.sh'
+    # cannot be killed by an unprivileged user.
+    kill $pids 2>/dev/null || true
+    sleep 1
+
+    local need_sudo=""
+    for p in $pids; do
+        if kill -0 "$p" 2>/dev/null; then
+            need_sudo="$need_sudo $p"
+        fi
+    done
+
+    if [ -n "$need_sudo" ] && command -v sudo &> /dev/null; then
+        warn "Some processes need elevated privileges:$need_sudo"
+        sudo kill $need_sudo 2>/dev/null || true
+    fi
+
+    for i in $(seq 1 10); do
+        local alive=""
+        for p in $pids; do
+            kill -0 "$p" 2>/dev/null && alive="$alive $p"
+        done
+        [ -z "$alive" ] && return 0
+        sleep 1
+    done
+
+    # SIGKILL fallback
+    kill -9 $pids 2>/dev/null || true
+    if command -v sudo &> /dev/null; then
+        sudo kill -9 $pids 2>/dev/null || true
+    fi
+}
+
+_stop_elk() {
+    local elk_dir=""
+    if [ -d "$SCRIPT_DIR/elk" ]; then
+        elk_dir="$SCRIPT_DIR/elk"
+    elif [ -d "$REPO_ROOT/elk" ]; then
+        elk_dir="$REPO_ROOT/elk"
+    fi
+    [ -z "$elk_dir" ] && return 0
+    info "Stopping ELK services in $elk_dir..."
+    (cd "$elk_dir" && (docker compose stop 2>/dev/null || docker-compose stop 2>/dev/null)) || true
+}
+
 case "${1:-}" in
     stop)
+        STOPPED_ANY=false
+        # 1. Try PID file first
         if _server_running; then
             PID=$(cat "$PID_FILE")
-            info "Stopping server (PID $PID)..."
-            kill "$PID" 2>/dev/null || true
-            # Wait for graceful shutdown
-            for i in $(seq 1 10); do
-                kill -0 "$PID" 2>/dev/null || break
-                sleep 1
-            done
-            kill -9 "$PID" 2>/dev/null || true
-            rm -f "$PID_FILE"
+            _kill_pids "$PID"
+            STOPPED_ANY=true
+        fi
+        rm -f "$PID_FILE"
+
+        # 2. Fall back to scanning port 8000 and main.py processes —
+        #    catches foreground / non-script launches the PID file missed.
+        DISCOVERED="$(_discover_server_pids)"
+        DISCOVERED="$(echo "$DISCOVERED" | xargs)"
+        if [ -n "$DISCOVERED" ]; then
+            warn "Found additional server processes outside PID file: $DISCOVERED"
+            _kill_pids "$DISCOVERED"
+            STOPPED_ANY=true
+        fi
+
+        # 3. Always tear down ELK if we stopped anything (or asked nicely)
+        _stop_elk
+
+        if $STOPPED_ANY; then
             ok "Server stopped."
         else
             warn "Server is not running."
-            rm -f "$PID_FILE"
         fi
         exit 0
         ;;
@@ -62,8 +161,14 @@ case "${1:-}" in
             PID=$(cat "$PID_FILE")
             ok "Server is running (PID $PID)"
         else
-            warn "Server is not running."
-            rm -f "$PID_FILE"
+            DISCOVERED="$(_discover_server_pids | xargs)"
+            if [ -n "$DISCOVERED" ]; then
+                warn "Server is running but PID file is stale: $DISCOVERED"
+                warn "Run '$0 stop' to clean up."
+            else
+                warn "Server is not running."
+                rm -f "$PID_FILE"
+            fi
         fi
         exit 0
         ;;

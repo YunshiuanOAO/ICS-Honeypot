@@ -13,7 +13,7 @@ from config_loader import ConfigLoader
 from db.database import LogDB
 from docker_manager import DockerDeploymentManager
 from log_collector import ContainerLogCollector
-from proxy.proxy_manager import ProxyManager
+from proxy.proxy_manager import ProxyManager, normalize_deployment_proxies
 from whitelist import WhitelistManager
 
 
@@ -137,11 +137,15 @@ class NodeAgent:
 
     def _deployment_status(self):
         status = self.deployment_manager.get_status()
-        # Add proxy status to deployment status
         proxy_status = self.proxy_manager.get_status()
         for deployment_id, proxy_info in proxy_status.items():
             if deployment_id in status:
-                status[deployment_id]["proxy"] = proxy_info
+                # New shape: list under "proxies"; legacy single-proxy fields kept too.
+                status[deployment_id]["proxies"] = proxy_info.get("proxies", [])
+                # Maintain legacy "proxy" field with first proxy summary so older
+                # dashboard rendering still finds something useful.
+                if proxy_info.get("proxies"):
+                    status[deployment_id]["proxy"] = proxy_info["proxies"][0]
         return status
 
     def _apply_deployments(self):
@@ -158,14 +162,26 @@ class NodeAgent:
         
         # Apply proxies first to determine backend ports
         self._apply_proxies(docker_deployments)
-        
+
         # Inject backend ports from proxy manager into deployment configs
-        # This ensures Docker uses the same port that the proxy expects
+        # so Docker binds the same ports the proxies expect.
         port_mapping = self.proxy_manager.get_backend_port_mapping()
         for deployment in docker_deployments:
-            if deployment["id"] in port_mapping:
-                deployment.setdefault("proxy", {})
-                deployment["proxy"]["backend_port"] = port_mapping[deployment["id"]]
+            dep_ports = port_mapping.get(deployment["id"], {})
+            if not dep_ports:
+                continue
+            # Update each entry in the proxies list with its allocated backend_port
+            proxies = deployment.get("proxies")
+            if not isinstance(proxies, list) or not proxies:
+                # Legacy single proxy — keep the field shape for older code paths.
+                if deployment.get("proxy"):
+                    name = next(iter(dep_ports))
+                    deployment["proxy"]["backend_port"] = dep_ports[name]
+                continue
+            for proxy_cfg in proxies:
+                name = proxy_cfg.get("name")
+                if name in dep_ports:
+                    proxy_cfg["backend_port"] = dep_ports[name]
         
         # Then apply Docker deployments
         docker_success, docker_message = self.deployment_manager.apply_deployments(docker_deployments)
@@ -183,53 +199,76 @@ class NodeAgent:
     def _wait_for_backends_ready(self, timeout: int = 30):
         """Wait for backend containers to accept connections"""
         import socket as sock
-        
-        for deployment_id, instance in self.proxy_manager.get_all_proxies().items():
+
+        for (deployment_id, name), instance in self.proxy_manager.get_all_proxies().items():
             backend_host = instance.proxy.config.backend_host
             backend_port = instance.backend_port
             start_time = time.time()
-            
+            label = f"{deployment_id}/{name}"
+
             while time.time() - start_time < timeout:
                 try:
                     test_sock = sock.create_connection((backend_host, backend_port), timeout=1)
                     test_sock.close()
-                    print(f"[{self.node_id}] Backend ready: {deployment_id} ({backend_host}:{backend_port})")
+                    print(f"[{self.node_id}] Backend ready: {label} ({backend_host}:{backend_port})")
                     break
                 except (ConnectionRefusedError, sock.timeout, OSError):
                     time.sleep(0.5)
             else:
-                print(f"[{self.node_id}] WARNING: Backend not ready after {timeout}s: {deployment_id} ({backend_host}:{backend_port})")
+                print(f"[{self.node_id}] WARNING: Backend not ready after {timeout}s: {label} ({backend_host}:{backend_port})")
 
     def _apply_proxies(self, deployments):
-        """Configure and add proxies for deployments that have proxy config"""
+        """Configure and add proxies for each deployment.
+
+        Drops any proxies whose deployment is no longer present, then iterates
+        the deployment's ``proxies`` list (or legacy ``proxy`` dict) and adds
+        each one to the ProxyManager.
+        """
+        desired_dep_ids = {d["id"] for d in deployments if d.get("enabled", True)}
+        for (dep_id, _name) in list(self.proxy_manager.get_all_proxies().keys()):
+            if dep_id not in desired_dep_ids:
+                self.proxy_manager.remove_deployment(dep_id)
+
         for deployment in deployments:
             if not deployment.get("enabled", True):
                 continue
-            
-            proxy_config = deployment.get("proxy", {})
-            if not proxy_config.get("enabled", False):
-                continue
-            
+
             deployment_id = deployment["id"]
-            protocol = proxy_config.get("protocol") or deployment.get("template") or "tcp"
-            listen_port = proxy_config.get("listen_port")
-            backend_port = proxy_config.get("backend_port")
-            
-            if not listen_port:
-                print(f"[{self.node_id}] Proxy for {deployment_id} skipped: no listen_port")
-                continue
-            
-            try:
-                self.proxy_manager.add_proxy(
-                    deployment_id=deployment_id,
-                    protocol=protocol,
-                    listen_port=listen_port,
-                    backend_port=backend_port,
-                    extra_config=proxy_config.get("extra_config"),
-                )
-                print(f"[{self.node_id}] Proxy configured for {deployment_id}: {protocol} :{listen_port} -> :{backend_port}")
-            except Exception as e:
-                print(f"[{self.node_id}] Failed to configure proxy for {deployment_id}: {e}")
+            proxy_entries = normalize_deployment_proxies(deployment)
+
+            # Drop existing proxies for this deployment that are no longer in the desired list
+            desired_names = {p["name"] for p in proxy_entries if p.get("enabled", True)}
+            for inst in self.proxy_manager.get_proxies_for_deployment(deployment_id):
+                if inst.name not in desired_names:
+                    self.proxy_manager.remove_proxy(deployment_id, inst.name)
+
+            for proxy_cfg in proxy_entries:
+                if not proxy_cfg.get("enabled", True):
+                    continue
+
+                name = proxy_cfg["name"]
+                protocol = proxy_cfg.get("protocol") or deployment.get("template") or "tcp"
+                listen_port = proxy_cfg.get("listen_port")
+                backend_port = proxy_cfg.get("backend_port")
+                container_port = proxy_cfg.get("container_port")
+
+                if not listen_port:
+                    print(f"[{self.node_id}] Proxy {deployment_id}/{name} skipped: no listen_port")
+                    continue
+
+                try:
+                    self.proxy_manager.add_proxy(
+                        deployment_id=deployment_id,
+                        name=name,
+                        protocol=protocol,
+                        listen_port=listen_port,
+                        backend_port=backend_port,
+                        container_port=container_port,
+                        extra_config=proxy_cfg.get("extra_config"),
+                    )
+                    print(f"[{self.node_id}] Proxy configured for {deployment_id}/{name}: {protocol} :{listen_port} -> :{backend_port}")
+                except Exception as e:
+                    print(f"[{self.node_id}] Failed to configure proxy for {deployment_id}/{name}: {e}")
 
     def _is_fully_deployed(self):
         deployments = self.config.get("deployments", [])
@@ -339,7 +378,7 @@ class NodeAgent:
 
     def _collect_proxy_logs(self):
         """Collect attack-log entries from each proxy's events.jsonl."""
-        for deployment_id, instance in self.proxy_manager.get_all_proxies().items():
+        for (deployment_id, _name), instance in self.proxy_manager.get_all_proxies().items():
             self._ingest_proxy_log_file(
                 log_path=instance.logger.log_path,
                 deployment_id=deployment_id,
@@ -349,7 +388,7 @@ class NodeAgent:
 
     def _collect_whitelist_logs(self):
         """Collect whitelist entries from each proxy's whitelist.jsonl."""
-        for deployment_id, instance in self.proxy_manager.get_all_proxies().items():
+        for (deployment_id, _name), instance in self.proxy_manager.get_all_proxies().items():
             wl_logger = instance.whitelist_logger
             if not wl_logger:
                 continue
