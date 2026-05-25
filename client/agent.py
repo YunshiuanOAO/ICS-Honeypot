@@ -76,6 +76,7 @@ class NodeAgent:
         self.sync_interval = int(os.environ.get("AGENT_SYNC_INTERVAL", "15"))
         self.request_timeout = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "15"))
         self.upload_batch_size = int(os.environ.get("AGENT_UPLOAD_BATCH_SIZE", "200"))
+        self.collect_max_lines_per_file = int(os.environ.get("AGENT_COLLECT_MAX_LINES_PER_FILE", "5000"))
 
     def start(self):
         self.running = True
@@ -113,6 +114,8 @@ class NodeAgent:
             try:
                 self._send_heartbeat()
                 self._fetch_config()
+                self._upload_logs()
+                self._upload_whitelist_logs()
                 self._collect_container_logs()
                 self._collect_proxy_logs()  # NEW: Collect proxy logs
                 self._collect_whitelist_logs()
@@ -424,6 +427,7 @@ class NodeAgent:
         try:
             with open(log_path, "r", encoding="utf-8") as f:
                 f.seek(offset)
+                lines_processed = 0
                 for line in f:
                     if not line.strip():
                         continue
@@ -465,6 +469,9 @@ class NodeAgent:
                         metadata=metadata,
                         timestamp=entry.get("timestamp"),
                     )
+                    lines_processed += 1
+                    if lines_processed >= self.collect_max_lines_per_file:
+                        break
 
                 self.log_collector.offsets[state_key] = f.tell()
                 self.log_collector._save_state()

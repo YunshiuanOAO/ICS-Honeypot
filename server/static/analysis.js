@@ -90,7 +90,7 @@
     function buildAnalysisQuery() {
         const windowSel = document.getElementById("ip-analysis-window");
         const value = windowSel ? windowSel.value : "";
-        const params = ["limit=200"];
+        const params = ["limit=500"];
 
         if (value === "custom") {
             const fromIso = localDatetimeToIso(document.getElementById("ip-analysis-from")?.value || "");

@@ -51,6 +51,9 @@ class LogDB:
                 except sqlite3.OperationalError:
                     pass
 
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_logs_uploaded_id ON logs (uploaded, id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_whitelist_logs_uploaded_id ON whitelist_logs (uploaded, id)')
+
                 conn.commit()
             except Exception as e:
                 print(f"[LogDB] Error initializing database: {e}")
