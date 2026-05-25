@@ -526,37 +526,14 @@ class NodeAgent:
         logs = self.db.get_logs(limit=self.upload_batch_size)
         if not logs:
             return
+        self._upload_log_rows(
+            logs=logs,
+            endpoint="/api/logs",
+            mark_uploaded=self.db.mark_uploaded,
+            label="Log",
+        )
 
-        log_list = []
-        log_ids = []
-        for row in logs:
-            log_ids.append(row[0])
-            log_list.append({
-                "timestamp": row[1],
-                "attacker_ip": row[2],
-                "protocol": row[3],
-                "request_data": row[4],
-                "response_data": row[5],
-                "metadata": row[6],
-            })
-
-        payload = {"node_id": self.node_id, "logs": log_list}
-        try:
-            response = requests.post(
-                f"{self.server_url}/api/logs",
-                json=payload,
-                headers=self._auth_headers(),
-                timeout=self.request_timeout,
-            )
-            if response.status_code == 200:
-                self.db.mark_uploaded(log_ids)
-            else:
-                print(f"[{self.node_id}] Log upload returned {response.status_code}: {response.text[:120]}")
-        except requests.exceptions.RequestException as exc:
-            print(f"[{self.node_id}] Log upload failed: {exc}")
-
-    def _upload_whitelist_logs(self):
-        logs = self.db.get_whitelist_logs(limit=self.upload_batch_size)
+    def _upload_log_rows(self, logs, endpoint, mark_uploaded, label):
         if not logs:
             return
 
@@ -576,17 +553,33 @@ class NodeAgent:
         payload = {"node_id": self.node_id, "logs": log_list}
         try:
             response = requests.post(
-                f"{self.server_url}/api/whitelist_logs",
+                f"{self.server_url}{endpoint}",
                 json=payload,
                 headers=self._auth_headers(),
                 timeout=self.request_timeout,
             )
             if response.status_code == 200:
-                self.db.mark_whitelist_uploaded(log_ids)
+                mark_uploaded(log_ids)
+            elif response.status_code in (403, 413) and len(logs) > 1:
+                mid = len(logs) // 2
+                print(f"[{self.node_id}] {label} upload returned {response.status_code}; splitting batch {len(logs)} -> {mid}+{len(logs)-mid}")
+                self._upload_log_rows(logs[:mid], endpoint, mark_uploaded, label)
+                self._upload_log_rows(logs[mid:], endpoint, mark_uploaded, label)
             else:
-                print(f"[{self.node_id}] Whitelist log upload returned {response.status_code}: {response.text[:120]}")
+                print(f"[{self.node_id}] {label} upload returned {response.status_code}: {response.text[:120]}")
         except requests.exceptions.RequestException as exc:
-            print(f"[{self.node_id}] Whitelist log upload failed: {exc}")
+            print(f"[{self.node_id}] {label} upload failed: {exc}")
+
+    def _upload_whitelist_logs(self):
+        logs = self.db.get_whitelist_logs(limit=self.upload_batch_size)
+        if not logs:
+            return
+        self._upload_log_rows(
+            logs=logs,
+            endpoint="/api/whitelist_logs",
+            mark_uploaded=self.db.mark_whitelist_uploaded,
+            label="Whitelist log",
+        )
 
     def _fetch_config(self):
         try:
