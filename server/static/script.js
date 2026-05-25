@@ -1,7 +1,6 @@
 const API_BASE = "/api";
 
 let editDeployments = [];
-let isLogPaused = false;
 let attackMapInstance = null;
 let _serverInfoCache = null;
 
@@ -121,7 +120,6 @@ function showSection(sectionId) {
 
     if (sectionId === "dashboard") refreshData();
     if (sectionId === "agents") loadAgents();
-    if (sectionId === "logs") loadLogConsole();
     // Attack Map lifecycle
     if (sectionId === "attackmap") {
         if (!attackMapInstance) {
@@ -306,27 +304,6 @@ function renderNetworkTopology(agents) {
     lucide.createIcons();
 }
 
-async function loadLogConsole() {
-    if (isLogPaused) return;
-    const logs = await fetch(`${API_BASE}/recent_logs`).then((response) => response.json());
-    const consoleEl = document.getElementById("log-console");
-    consoleEl.innerHTML = "";
-
-    if (!logs.length) {
-        consoleEl.innerHTML = '<div class="log-entry info"><span class="log-time">[System]</span><span class="log-message">Waiting for logs...</span></div>';
-        return;
-    }
-
-    logs.slice().reverse().forEach((log) => {
-        const metadata = parseMetadata(log.metadata);
-        const summary = `${log.node_id} ${log.protocol} ${buildLogSummary(log, metadata)}`;
-        const entry = document.createElement("div");
-        entry.className = "log-entry info";
-        entry.innerHTML = `<span class="log-time">[${formatTime(log.timestamp)}]</span><span class="log-message">${escapeHtml(summary)}</span>`;
-        consoleEl.appendChild(entry);
-    });
-}
-
 async function loadAgents(isDashboardUpdate = false) {
     try {
         const agents = await fetch(`${API_BASE}/agents`).then((response) => response.json());
@@ -468,33 +445,14 @@ async function deleteAgent(nodeId) {
 }
 
 
-function toggleLogPause() {
-    isLogPaused = !isLogPaused;
-    document.getElementById("log-pause-btn").innerHTML = isLogPaused
-        ? '<i data-lucide="play"></i><span>Resume</span>'
-        : '<i data-lucide="pause"></i><span>Pause</span>';
-    document.getElementById("console-status").innerHTML = isLogPaused
-        ? '<span class="status-dot paused"></span>Paused'
-        : '<span class="status-dot streaming"></span>Streaming';
-    if (!isLogPaused) loadLogConsole();
-    lucide.createIcons();
-}
-
-function clearLogConsole() {
-    document.getElementById("log-console").innerHTML = '<div class="log-entry info"><span class="log-time">[System]</span><span class="log-message">Console cleared</span></div>';
-}
-
 Object.assign(window, {
     Toast,
     showSection,
     refreshData,
     loadAgents,
-    loadLogConsole,
     toggleAgent,
     resetAgent,
     deleteAgent,
-    toggleLogPause,
-    clearLogConsole,
     toggleTheme,
     openElkDashboard,
 });
@@ -505,9 +463,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await refreshData();
     setInterval(() => {
         const dashboardVisible = !document.getElementById("dashboard").classList.contains("hidden");
-        const logsVisible = !document.getElementById("logs").classList.contains("hidden");
         if (dashboardVisible) loadAgents(true);
-        if (logsVisible && !isLogPaused) loadLogConsole();
     }, 5000);
     lucide.createIcons();
 });

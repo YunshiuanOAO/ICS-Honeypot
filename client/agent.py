@@ -73,6 +73,9 @@ class NodeAgent:
         # Heartbeat failure tracking - don't stop services on single failure
         self._heartbeat_consecutive_failures = 0
         self._max_heartbeat_failures = 3  # Stop only after this many consecutive failures
+        self.sync_interval = int(os.environ.get("AGENT_SYNC_INTERVAL", "15"))
+        self.request_timeout = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "15"))
+        self.upload_batch_size = int(os.environ.get("AGENT_UPLOAD_BATCH_SIZE", "200"))
 
     def start(self):
         self.running = True
@@ -85,7 +88,7 @@ class NodeAgent:
             if self.config.get("deployments"):
                 print(f"[{self.node_id}] Configuration received!")
                 break
-            time.sleep(5)
+            time.sleep(self.sync_interval)
 
         self.sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
         self.sync_thread.start()
@@ -513,7 +516,7 @@ class NodeAgent:
         return f"{protocol} interaction from {src_ip}"
 
     def _upload_logs(self):
-        logs = self.db.get_logs(limit=50)
+        logs = self.db.get_logs(limit=self.upload_batch_size)
         if not logs:
             return
 
@@ -532,14 +535,21 @@ class NodeAgent:
 
         payload = {"node_id": self.node_id, "logs": log_list}
         try:
-            response = requests.post(f"{self.server_url}/api/logs", json=payload, headers=self._auth_headers(), timeout=3)
+            response = requests.post(
+                f"{self.server_url}/api/logs",
+                json=payload,
+                headers=self._auth_headers(),
+                timeout=self.request_timeout,
+            )
             if response.status_code == 200:
                 self.db.mark_uploaded(log_ids)
-        except Exception:
-            pass
+            else:
+                print(f"[{self.node_id}] Log upload returned {response.status_code}: {response.text[:120]}")
+        except requests.exceptions.RequestException as exc:
+            print(f"[{self.node_id}] Log upload failed: {exc}")
 
     def _upload_whitelist_logs(self):
-        logs = self.db.get_whitelist_logs(limit=50)
+        logs = self.db.get_whitelist_logs(limit=self.upload_batch_size)
         if not logs:
             return
 
@@ -562,16 +572,22 @@ class NodeAgent:
                 f"{self.server_url}/api/whitelist_logs",
                 json=payload,
                 headers=self._auth_headers(),
-                timeout=3,
+                timeout=self.request_timeout,
             )
             if response.status_code == 200:
                 self.db.mark_whitelist_uploaded(log_ids)
-        except Exception:
-            pass
+            else:
+                print(f"[{self.node_id}] Whitelist log upload returned {response.status_code}: {response.text[:120]}")
+        except requests.exceptions.RequestException as exc:
+            print(f"[{self.node_id}] Whitelist log upload failed: {exc}")
 
     def _fetch_config(self):
         try:
-            response = requests.get(f"{self.server_url}/api/config/{self.node_id}", headers=self._auth_headers(), timeout=3)
+            response = requests.get(
+                f"{self.server_url}/api/config/{self.node_id}",
+                headers=self._auth_headers(),
+                timeout=self.request_timeout,
+            )
             if response.status_code != 200:
                 return
 

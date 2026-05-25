@@ -1,0 +1,48 @@
+# ICS — Modbus write/state-changing function code attempt
+#
+# Function codes 5, 6, 15, 16, 22, 23 all mutate PLC state. On a honeypot
+# every one of these is malicious — there are no legitimate writers.
+name: ICS Modbus Write Attempt
+type: any
+index: honeypot-*
+
+# Match any honeypot log with a write-class Modbus function code
+filter:
+  - query:
+      query_string:
+        query: >
+          protocol:modbus AND
+          (modbus_function_code:5 OR modbus_function_code:6 OR
+           modbus_function_code:15 OR modbus_function_code:16 OR
+           modbus_function_code:22 OR modbus_function_code:23)
+
+# How long to wait before re-alerting on the same key
+realert:
+  minutes: 5
+query_key:
+  - attacker_ip
+  - modbus_function_code
+
+# Forward to the honeypot server's ingest endpoint
+alert:
+  - post
+
+http_post_url: "${SERVER_INGEST_URL}"
+http_post_headers:
+  X-Api-Key: "${API_KEY}"
+http_post_static_payload:
+  signature: "ICS Modbus Write Function Code attempt"
+  signature_id: 7000101
+  category: "Industrial Control System Activity"
+  severity: 1
+  source: "elastalert"
+http_post_payload:
+  attacker_ip: attacker_ip
+  node_id: node_id
+  protocol: protocol
+  timestamp: "@timestamp"
+  src_ip: src_ip
+  src_port: src_port
+  dst_ip: dst_ip
+  dst_port: dst_port
+  function_code: modbus_function_code

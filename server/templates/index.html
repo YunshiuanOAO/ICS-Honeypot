@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>APS Honeypot Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css?v=24">
+    <link rel="stylesheet" href="/static/style.css?v=29">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -53,10 +53,6 @@
                 <button class="nav-item" data-section="agents" onclick="showSection('agents')">
                     <i data-lucide="cpu"></i>
                     <span>Agents</span>
-                </button>
-                <button class="nav-item" data-section="logs" onclick="showSection('logs')">
-                    <i data-lucide="terminal"></i>
-                    <span>Live Logs</span>
                 </button>
                 <button class="nav-item" id="elk-dashboard-btn" onclick="openElkDashboard()" title="Open ELK Kibana Dashboard">
                     <i data-lucide="pie-chart"></i>
@@ -157,7 +153,81 @@
                 <div id="attackmap-container">
                     <!-- Populated by attackmap.js -->
                 </div>
+
+                <!-- Log Analysis (grouped by attacker IP) -->
+                <div class="ip-analysis-panel">
+                    <div class="section-header">
+                        <h3>
+                            <i data-lucide="shield-alert"></i>
+                            Log Analysis — Grouped by Attacker IP
+                        </h3>
+                        <div class="ip-analysis-actions">
+                            <select id="ip-analysis-window" class="ip-analysis-select">
+                                <option value="">All time</option>
+                                <option value="1">Last hour</option>
+                                <option value="24">Last 24 hours</option>
+                                <option value="168" selected>Last 7 days</option>
+                                <option value="custom">Custom range…</option>
+                            </select>
+                            <div class="ip-analysis-custom" id="ip-analysis-custom" hidden>
+                                <label class="ip-range-field">
+                                    <i data-lucide="calendar" class="ip-range-icon"></i>
+                                    <span class="ip-range-label">From</span>
+                                    <input id="ip-analysis-from" type="datetime-local" class="ip-analysis-datetime" />
+                                </label>
+                                <span class="ip-range-sep">→</span>
+                                <label class="ip-range-field">
+                                    <span class="ip-range-label">To</span>
+                                    <input id="ip-analysis-to" type="datetime-local" class="ip-analysis-datetime" />
+                                </label>
+                                <button class="ip-range-clear" type="button" id="ip-analysis-clear-custom" title="Clear custom range" aria-label="Clear">
+                                    <i data-lucide="x"></i>
+                                </button>
+                            </div>
+                            <input id="ip-analysis-search" type="text" placeholder="Filter IP…" class="ip-analysis-search" />
+                            <button class="btn btn-secondary btn-sm" onclick="refreshIpAnalysis()">
+                                <i data-lucide="refresh-cw"></i>
+                                <span>Refresh</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="ip-analysis-grid" id="ip-analysis-grid">
+                        <div class="table-empty-state" id="ip-analysis-empty">
+                            <i data-lucide="search"></i>
+                            <p>No attacker activity yet</p>
+                        </div>
+                    </div>
+                </div>
             </section>
+
+            <!-- IP Detail Modal -->
+            <div class="ip-modal-backdrop" id="ip-modal-backdrop" onclick="closeIpModal(event)">
+                <div class="ip-modal" onclick="event.stopPropagation()">
+                    <div class="ip-modal-header">
+                        <div>
+                            <h2 id="ip-modal-title">IP Details</h2>
+                            <p class="ip-modal-subtitle" id="ip-modal-subtitle"></p>
+                        </div>
+                        <button class="ip-modal-close" onclick="closeIpModal()" aria-label="Close">
+                            <i data-lucide="x"></i>
+                        </button>
+                    </div>
+                    <div class="ip-modal-tabs">
+                        <button class="ip-modal-tab active" data-tab="overview" onclick="switchIpTab('overview')">Overview</button>
+                        <button class="ip-modal-tab" data-tab="alerts" onclick="switchIpTab('alerts')">
+                            Alerts <span class="ip-modal-tab-badge" id="ip-modal-alerts-badge">0</span>
+                        </button>
+                        <button class="ip-modal-tab" data-tab="packets" onclick="switchIpTab('packets')">
+                            Packets <span class="ip-modal-tab-badge" id="ip-modal-packets-badge">0</span>
+                        </button>
+                    </div>
+                    <div class="ip-modal-body">
+                        <div class="ip-modal-tab-panel active" data-tab-panel="overview" id="ip-modal-overview"></div>
+                        <div class="ip-modal-tab-panel" data-tab-panel="alerts" id="ip-modal-alerts"></div>
+                        <div class="ip-modal-tab-panel" data-tab-panel="packets" id="ip-modal-packets"></div>
+                    </div>
+                </div>
+            </div>
 
             <!-- Agents Section -->
             <section id="agents" class="content-section hidden">
@@ -179,44 +249,6 @@
                 </div>
             </section>
 
-            <!-- Logs Section -->
-            <section id="logs" class="content-section hidden">
-                <header class="page-header">
-                    <div class="header-title">
-                        <h1>Live Logs</h1>
-                        <p class="header-subtitle">Real-time log stream</p>
-                    </div>
-                    <div class="header-actions">
-                        <button class="btn btn-secondary" id="log-pause-btn" onclick="toggleLogPause()">
-                            <i data-lucide="pause"></i>
-                            <span>Pause</span>
-                        </button>
-                        <button class="btn btn-secondary" onclick="clearLogConsole()">
-                            <i data-lucide="trash-2"></i>
-                            <span>Clear</span>
-                        </button>
-                    </div>
-                </header>
-                <div class="log-console-wrapper">
-                    <div class="log-console-header">
-                        <span class="console-title">
-                            <i data-lucide="terminal"></i>
-                            Console Output
-                        </span>
-                        <span class="console-status" id="console-status">
-                            <span class="status-dot streaming"></span>
-                            Streaming
-                        </span>
-                    </div>
-                    <div class="log-console" id="log-console">
-                        <div class="log-entry info">
-                            <span class="log-time">[System]</span>
-                            <span class="log-message">Waiting for logs...</span>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
         </main>
     </div>
 
@@ -225,7 +257,8 @@
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://unpkg.com/topojson-client@3"></script>
     <script src="/static/attackmap.js?v=26"></script>
-    <script src="/static/script.js?v=33"></script>
+    <script src="/static/script.js?v=34"></script>
+    <script src="/static/analysis.js?v=8"></script>
     <script>
         // Initialize Lucide icons
         lucide.createIcons();

@@ -1,0 +1,28 @@
+# ElastAlert 2 main configuration for the ICS honeypot.
+#
+# Reads honeypot logs from Elasticsearch (indexed by Filebeat as
+# `honeypot-YYYY.MM.dd`), evaluates the rules in rules-rendered/, and
+# posts matching alerts back to the server's /api/alerts/ingest endpoint.
+
+# Use the rendered rules dir (env vars expanded at startup by render-rules.py)
+rules_folder: /tmp/rules-rendered
+
+# How often the rule scheduler ticks
+run_every:
+  seconds: 30
+
+# Look-back window applied to each rule's filter for "new" events
+buffer_time:
+  minutes: 5
+
+# Elasticsearch connection
+es_host: elasticsearch
+es_port: 9200
+use_ssl: false
+
+# Where ElastAlert keeps its own state (in ES)
+writeback_index: elastalert_status
+
+# Cap how long ElastAlert will retry a failed alert delivery
+alert_time_limit:
+  days: 1

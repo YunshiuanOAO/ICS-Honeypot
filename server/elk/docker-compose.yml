@@ -49,6 +49,41 @@ services:
     networks:
       - honeypot-net
 
+  elastalert:
+    image: jertel/elastalert2:2.18.0
+    container_name: honeypot-elastalert
+    # ${API_KEY} comes from the host shell / docker-compose .env; rules
+    # are rendered at startup so secrets aren't checked into git.
+    environment:
+      - API_KEY=${API_KEY}
+      - SERVER_INGEST_URL=${SERVER_INGEST_URL:-http://host.docker.internal:8000/api/alerts/ingest}
+    extra_hosts:
+      # Lets the container talk to the FastAPI server running on the host.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./elastalert/config.yaml:/opt/elastalert/config.yaml:ro
+      - ./elastalert/rules:/opt/elastalert/rules:ro
+      - ./elastalert/render-rules.py:/opt/elastalert/render-rules.py:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        python3 /opt/elastalert/render-rules.py &&
+        # Wait for ES to be reachable (max 60s) before initializing or starting.
+        for i in $$(seq 1 30); do
+          if wget -q -O- http://elasticsearch:9200/_cluster/health > /dev/null 2>&1; then
+            echo "[entrypoint] elasticsearch is reachable"; break
+          fi
+          echo "[entrypoint] waiting for elasticsearch ($$i/30)..."; sleep 2
+        done &&
+        # Create the writeback index if it doesn't exist (idempotent).
+        elastalert-create-index --index elastalert_status --old-index "" 2>&1 | tail -5 || true &&
+        exec elastalert --config /opt/elastalert/config.yaml --verbose
+    depends_on:
+      - elasticsearch
+    networks:
+      - honeypot-net
+    restart: unless-stopped
+
 volumes:
   es_data:
   filebeat_data:

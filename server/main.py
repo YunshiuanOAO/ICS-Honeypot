@@ -110,6 +110,7 @@ def get_server_public_url(request: Request = None) -> str:
 
 app = FastAPI(title="Honeypot Central Server")
 
+
 # Add CORS middleware for cross-origin requests (needed when frontend is served from a different domain)
 app.add_middleware(
     CORSMiddleware,
@@ -992,6 +993,140 @@ async def recent_logs():
     return logs
 
 
+# ── IP-grouped log analysis (powers the panel below the Attack Map) ──
+
+def _normalize_to_utc_iso(value: Optional[str]) -> Optional[str]:
+    """Convert any user-supplied ISO timestamp to a UTC ISO string with
+    ``+00:00`` offset. Naive (TZ-less) input is interpreted as local time —
+    that's what HTML's ``<input type="datetime-local">`` emits.
+
+    Logs in the DB are stored with UTC offsets (the proxy generates
+    ``...+00:00`` timestamps), so comparing against UTC strings is the
+    only correct path. Local-naive ``datetime.now().isoformat()`` strings
+    silently produce empty results in TZ != UTC environments.
+    """
+    if not value:
+        return None
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        dt = _dt.fromisoformat(value)
+    except ValueError:
+        return value  # let SQLite do its best — fail open
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # attach local tz
+    return dt.astimezone(_tz.utc).isoformat()
+
+
+@app.get("/api/ip_analysis", dependencies=[Depends(require_session)])
+async def ip_analysis(
+    limit: int = 200,
+    hours: Optional[int] = None,
+    from_ts: Optional[str] = None,
+    to_ts: Optional[str] = None,
+):
+    """Return attacker-IP rollups: counts, protocols, agents touched, alert stats.
+
+    Time-range options (mutually exclusive — precedence: explicit range > hours):
+    - ``from_ts`` / ``to_ts``: ISO timestamps for a custom window (either may be omitted)
+    - ``hours``: rolling window of the last N hours
+    """
+    since: Optional[str] = None
+    until: Optional[str] = None
+    if from_ts or to_ts:
+        since = _normalize_to_utc_iso(from_ts)
+        until = _normalize_to_utc_iso(to_ts)
+    elif hours:
+        from datetime import timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    rows = await db.get_ip_summary(limit=limit, since=since, until=until)
+
+    # Suricata severity is 1=high, 2=medium, 3=low. max_severity from SQL is
+    # the MIN (because lower number = higher severity). Normalize null=0.
+    for r in rows:
+        sev = r.get("max_severity") or 0
+        r["max_severity"] = sev if sev else 0
+        r["protocols"] = (r.get("protocols") or "").split(",") if r.get("protocols") else []
+        r["node_ids"] = (r.get("node_ids") or "").split(",") if r.get("node_ids") else []
+    return rows
+
+
+@app.get("/api/ip_details/{ip}", dependencies=[Depends(require_session)])
+async def ip_details(ip: str, limit: int = 200):
+    """Return packets + alerts for one attacker IP."""
+    ip = (ip or "").strip()
+    if not ip:
+        raise HTTPException(status_code=400, detail="ip is required")
+    logs = await db.get_logs_by_ip(ip, limit=limit)
+    alerts = await db.get_alerts(limit=limit, ip=ip)
+    return {"ip": ip, "logs": logs, "alerts": alerts}
+
+
+@app.get("/api/alerts", dependencies=[Depends(require_session)])
+async def list_alerts(limit: int = 200, ip: Optional[str] = None):
+    return await db.get_alerts(limit=limit, ip=ip)
+
+
+# ── External alert ingest (ElastAlert webhook, etc.) ──
+
+# Sentinel signature_id used when an external tool forgets to supply one.
+_INGEST_FALLBACK_SID = 7000000
+
+
+def _coerce_int(value, default=0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+@app.post("/api/alerts/ingest", dependencies=[Depends(require_api_key)])
+async def ingest_alert(payload: Dict[str, Any]):
+    """Accept a single alert from an external tool (ElastAlert, Suricata
+    forwarder, custom rule engines).
+
+    Required: ``signature`` and ``attacker_ip``. Everything else is
+    optional — unknown fields are preserved in the metadata column so
+    no information is lost.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON object expected")
+
+    signature = (payload.get("signature") or "").strip()
+    attacker_ip = (payload.get("attacker_ip") or payload.get("src_ip") or "").strip()
+    if not signature:
+        raise HTTPException(status_code=400, detail="`signature` is required")
+    if not attacker_ip:
+        raise HTTPException(status_code=400, detail="`attacker_ip` is required")
+
+    # Normalize severity (Suricata convention: 1=high, 2=med, 3=low). If
+    # an external tool sends 0 or something weird, fall back to "low".
+    severity = _coerce_int(payload.get("severity"), default=3)
+    if severity < 1 or severity > 4:
+        severity = 3
+
+    timestamp = (payload.get("timestamp") or "").strip() or datetime.now().isoformat()
+
+    alert = {
+        "timestamp": timestamp,
+        "attacker_ip": attacker_ip,
+        "node_id": (payload.get("node_id") or "").strip(),
+        "protocol": (payload.get("protocol") or "").lower(),
+        "signature": signature,
+        "signature_id": _coerce_int(payload.get("signature_id"), default=_INGEST_FALLBACK_SID),
+        "category": payload.get("category") or "Misc activity",
+        "severity": severity,
+        "src_ip": payload.get("src_ip") or attacker_ip,
+        "src_port": _coerce_int(payload.get("src_port"), default=0),
+        "dst_ip": payload.get("dst_ip") or "",
+        "dst_port": _coerce_int(payload.get("dst_port"), default=0),
+        "log_id": None,
+        "source": payload.get("source") or "elastalert",
+        "metadata": payload,
+    }
+    inserted = await db.insert_alert(alert)
+    return {"status": "ok", "inserted": bool(inserted)}
+
+
 @app.get("/api/whitelist_logs", dependencies=[Depends(require_session)])
 async def recent_whitelist_logs(limit: int = 100, node_id: Optional[str] = None):
     """Return recent whitelist (friendly) traffic entries.
@@ -1111,4 +1246,4 @@ async def sync_elk():
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False, access_log=False)

@@ -1,0 +1,49 @@
+# MQTT — suspicious CONNECT / wildcard subscriptions
+#
+# Catches admin/root/test username probes and topic enumeration via the
+# `#` / `+` wildcards (used by attackers to discover all topics on a
+# broker).
+name: MQTT Suspicious Activity
+type: any
+index: honeypot-*
+
+filter:
+  - query:
+      query_string:
+        query: >
+          protocol:mqtt AND (
+            mqtt_username:(admin OR root OR test OR guest OR mqtt OR user) OR
+            mqtt_topic:"#" OR
+            mqtt_topic:"+" OR
+            mqtt_topic:"\$SYS\/*"
+          )
+
+realert:
+  minutes: 5
+query_key:
+  - attacker_ip
+
+alert:
+  - post
+
+http_post_url: "${SERVER_INGEST_URL}"
+http_post_headers:
+  X-Api-Key: "${API_KEY}"
+http_post_static_payload:
+  signature: "MQTT auth/topic enumeration"
+  signature_id: 7000401
+  category: "Attempted Information Leak"
+  severity: 2
+  source: "elastalert"
+http_post_payload:
+  attacker_ip: attacker_ip
+  node_id: node_id
+  protocol: protocol
+  timestamp: "@timestamp"
+  src_ip: src_ip
+  src_port: src_port
+  dst_ip: dst_ip
+  dst_port: dst_port
+  mqtt_username: mqtt_username
+  mqtt_topic: mqtt_topic
+  mqtt_packet_type_name: mqtt_packet_type_name

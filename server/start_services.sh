@@ -512,6 +512,16 @@ fi
 mkdir -p "$SCRIPT_DIR/logs"
 mkdir -p "$REPO_ROOT/client/runtime"
 
+# Keep the daemon log from growing forever. Uvicorn access logs are disabled
+# in main.py, but existing deployments may already have large files.
+if [ -f "$LOG_FILE" ]; then
+    LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$LOG_SIZE" -gt $((100 * 1024 * 1024)) ]; then
+        mv "$LOG_FILE" "$LOG_FILE.$(date +%Y%m%d%H%M%S)"
+        ok "Rotated oversized server.log."
+    fi
+fi
+
 # ─────────────────────────────────────────
 # 11. Start ELK Stack
 # ─────────────────────────────────────────
@@ -534,13 +544,23 @@ else
     COMPOSE_CMD="docker-compose"
 fi
 
-$COMPOSE_CMD up -d --force-recreate
+# ElastAlert reads ${API_KEY} from the same .env the FastAPI server uses;
+# point compose at server/.env so the variable is substituted into the
+# elastalert container's environment block.
+COMPOSE_ENV_ARGS=""
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    COMPOSE_ENV_ARGS="--env-file $SCRIPT_DIR/.env"
+else
+    warn "$SCRIPT_DIR/.env not found — ElastAlert webhook may post without an API key."
+fi
+
+$COMPOSE_CMD $COMPOSE_ENV_ARGS up -d --force-recreate
 
 if [ $? -ne 0 ]; then
     fail "Failed to start ELK stack. Ensure Docker is running."
 fi
 
-ok "ELK Stack started."
+ok "ELK Stack started (Elasticsearch, Kibana, Filebeat, ElastAlert)."
 
 # ─────────────────────────────────────────
 # 12. Start Python Server
