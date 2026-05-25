@@ -9,6 +9,10 @@ import asyncio
 class ServerDB:
     def __init__(self, db_path="server.db"):
         self.db_path = db_path
+        try:
+            self.agent_offline_after_seconds = int(os.environ.get("AGENT_OFFLINE_AFTER_SECONDS", "300"))
+        except ValueError:
+            self.agent_offline_after_seconds = 300
         # Keep initial table creation synchronous to ensure DB exists at startup
         self._init_db_sync()
 
@@ -126,10 +130,6 @@ class ServerDB:
             'CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp)',
             'CREATE INDEX IF NOT EXISTS idx_alerts_ip_id ON alerts(attacker_ip, id DESC)',
             'CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(attacker_ip)',
-            'CREATE INDEX IF NOT EXISTS idx_logs_ip_id ON logs(attacker_ip, id DESC)',
-            'CREATE INDEX IF NOT EXISTS idx_logs_ts_ip ON logs(timestamp, attacker_ip)',
-            'CREATE INDEX IF NOT EXISTS idx_logs_node_id ON logs(node_id, id DESC)',
-            'CREATE INDEX IF NOT EXISTS idx_whitelist_logs_node_id ON whitelist_logs(node_id, id DESC)',
         ):
             try:
                 cursor.execute(idx_sql)
@@ -231,10 +231,14 @@ class ServerDB:
         agents = []
         for row in rows:
             agent = self._decode_agent_row(row)
-            # Check timeout (30 seconds)
+            # Check timeout. Some nodes can spend a few minutes draining local
+            # log backlog before their next heartbeat, so keep this tolerant
+            # and configurable instead of using a hard-coded 30-second cutoff.
             try:
                 last_seen = datetime.fromisoformat(agent['last_heartbeat'])
-                if (datetime.now() - last_seen).total_seconds() > 30:
+                heartbeat_age = (datetime.now() - last_seen).total_seconds()
+                agent['heartbeat_age_seconds'] = int(heartbeat_age)
+                if heartbeat_age > self.agent_offline_after_seconds:
                     agent['status'] = 'Offline'
             except Exception:
                 pass 
@@ -521,7 +525,7 @@ class ServerDB:
         if until:
             where_clauses.append("l.timestamp <= ?")
             params.append(until)
-        where = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        where = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
         # Alert sub-queries need their own window predicates because they
         # reference the alerts table, not logs.
@@ -533,6 +537,12 @@ class ServerDB:
         if until:
             alert_where.append("a.timestamp <= ?")
             alert_params.append(until)
+        # The logs table can be multiple GB because metadata stores full
+        # packet context. Bound dashboard rollups to a recent rowid slice so
+        # a refresh cannot scan the whole SQLite file and starve heartbeats.
+        scan_limit = int(os.environ.get("IP_ANALYSIS_SCAN_ROWS", "50000"))
+        scan_limit = max(min(scan_limit, 250000), 1000)
+
         sql = f'''
             SELECT
                 l.attacker_ip AS ip,
@@ -548,12 +558,13 @@ class ServerDB:
                           WHERE a.attacker_ip = l.attacker_ip
                             {("AND " + " AND ".join(alert_where)) if alert_where else ""}), 0) AS max_severity
             FROM logs l
+            WHERE l.id >= COALESCE((SELECT MAX(id) FROM logs), 0) - ?
             {where}
             GROUP BY l.attacker_ip
             ORDER BY last_seen DESC
             LIMIT ?
         '''
-        params = alert_params + alert_params + params
+        params = alert_params + alert_params + [scan_limit] + params
         params.append(limit)
 
         async with aiosqlite.connect(self.db_path, timeout=20) as db:

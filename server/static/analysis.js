@@ -504,7 +504,7 @@
     function startIpAnalysisAutoRefresh() {
         if (ipAnalysisRefreshTimer) return;
         refreshIpAnalysis();
-        ipAnalysisRefreshTimer = setInterval(refreshIpAnalysis, 10000);
+        ipAnalysisRefreshTimer = setInterval(refreshIpAnalysis, 30000);
     }
 
     function stopIpAnalysisAutoRefresh() {
@@ -570,10 +570,8 @@
             if (e.key === "Escape") closeIpModal();
         });
 
-        // Pre-fetch on load so data is ready the moment the user navigates
-        // to Attack Map. If they're already on it, this is the same call the
-        // showSection hook would make.
-        refreshIpAnalysis();
+        const attackMapVisible = !document.getElementById("attackmap")?.classList.contains("hidden");
+        if (attackMapVisible) startIpAnalysisAutoRefresh();
     });
 
     // Expose for inline onclick handlers
