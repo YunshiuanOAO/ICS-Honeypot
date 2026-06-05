@@ -130,6 +130,7 @@ class ServerDB:
             'CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp)',
             'CREATE INDEX IF NOT EXISTS idx_alerts_ip_id ON alerts(attacker_ip, id DESC)',
             'CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(attacker_ip)',
+            'CREATE INDEX IF NOT EXISTS idx_logs_ts_ip ON logs(timestamp, attacker_ip)',
         ):
             try:
                 cursor.execute(idx_sql)
@@ -538,40 +539,69 @@ class ServerDB:
             alert_where.append("a.timestamp <= ?")
             alert_params.append(until)
         # The logs table can be multiple GB because metadata stores full
-        # packet context. Bound dashboard rollups to a recent rowid slice so
-        # a refresh cannot scan the whole SQLite file and starve heartbeats.
-        scan_limit = int(os.environ.get("IP_ANALYSIS_SCAN_ROWS", "50000"))
+        # packet context. Keep this dashboard query bounded even when a time
+        # window is selected; otherwise the default "Last 7 days" view can
+        # spend many seconds grouping millions of rows and appear blank.
+        main_where = list(where_clauses)
+        main_params = list(params)
+        scan_limit = int(os.environ.get("IP_ANALYSIS_SCAN_ROWS", "2000"))
         scan_limit = max(min(scan_limit, 250000), 1000)
+        main_where.append("l.id >= COALESCE((SELECT MAX(id) FROM logs), 0) - ?")
+        main_params.append(scan_limit)
+        main_where.append("l.attacker_ip IS NOT NULL")
+        main_where.append("l.attacker_ip != ''")
+        where = ("WHERE " + " AND ".join(main_where)) if main_where else ""
+
+        alert_summary_where = ("WHERE " + " AND ".join(alert_where)) if alert_where else ""
 
         sql = f'''
+            WITH log_summary AS (
+                SELECT
+                    l.attacker_ip AS ip,
+                    COUNT(*) AS total_packets,
+                    GROUP_CONCAT(DISTINCT l.protocol) AS protocols,
+                    GROUP_CONCAT(DISTINCT l.node_id) AS node_ids,
+                    MIN(l.timestamp) AS first_seen,
+                    MAX(l.timestamp) AS last_seen
+                FROM logs l NOT INDEXED
+                {where}
+                GROUP BY l.attacker_ip
+            ),
+            alert_summary AS (
+                SELECT
+                    a.attacker_ip AS ip,
+                    COUNT(*) AS alert_count,
+                    MIN(a.severity) AS max_severity
+                FROM alerts a
+                {alert_summary_where}
+                GROUP BY a.attacker_ip
+            )
             SELECT
-                l.attacker_ip AS ip,
-                COUNT(*) AS total_packets,
-                GROUP_CONCAT(DISTINCT l.protocol) AS protocols,
-                GROUP_CONCAT(DISTINCT l.node_id) AS node_ids,
-                MIN(l.timestamp) AS first_seen,
-                MAX(l.timestamp) AS last_seen,
-                COALESCE((SELECT COUNT(*) FROM alerts a
-                          WHERE a.attacker_ip = l.attacker_ip
-                            {("AND " + " AND ".join(alert_where)) if alert_where else ""}), 0) AS alert_count,
-                COALESCE((SELECT MIN(severity) FROM alerts a
-                          WHERE a.attacker_ip = l.attacker_ip
-                            {("AND " + " AND ".join(alert_where)) if alert_where else ""}), 0) AS max_severity
-            FROM logs l
-            WHERE l.id >= COALESCE((SELECT MAX(id) FROM logs), 0) - ?
-            {where}
-            GROUP BY l.attacker_ip
-            ORDER BY last_seen DESC
+                ls.ip,
+                ls.total_packets,
+                ls.protocols,
+                ls.node_ids,
+                ls.first_seen,
+                ls.last_seen,
+                COALESCE(a.alert_count, 0) AS alert_count,
+                COALESCE(a.max_severity, 0) AS max_severity
+            FROM log_summary ls
+            LEFT JOIN alert_summary a ON a.ip = ls.ip
+            ORDER BY ls.last_seen DESC
             LIMIT ?
         '''
-        params = alert_params + alert_params + [scan_limit] + params
+        params = main_params + alert_params
         params.append(limit)
 
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(sql, params) as cursor:
-                rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        db_uri = f"file:{self.db_path}?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True, timeout=2)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA busy_timeout=2000")
+            cursor = conn.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+        finally:
+            conn.close()
 
     async def get_logs_by_ip(self, ip, limit=200):
         async with aiosqlite.connect(self.db_path, timeout=20) as db:

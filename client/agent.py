@@ -537,18 +537,8 @@ class NodeAgent:
         if not logs:
             return
 
-        log_list = []
-        log_ids = []
-        for row in logs:
-            log_ids.append(row[0])
-            log_list.append({
-                "timestamp": row[1],
-                "attacker_ip": row[2],
-                "protocol": row[3],
-                "request_data": row[4],
-                "response_data": row[5],
-                "metadata": row[6],
-            })
+        log_ids = [row[0] for row in logs]
+        log_list = [self._row_to_upload_log(row) for row in logs]
 
         payload = {"node_id": self.node_id, "logs": log_list}
         try:
@@ -565,10 +555,56 @@ class NodeAgent:
                 print(f"[{self.node_id}] {label} upload returned {response.status_code}; splitting batch {len(logs)} -> {mid}+{len(logs)-mid}")
                 self._upload_log_rows(logs[:mid], endpoint, mark_uploaded, label)
                 self._upload_log_rows(logs[mid:], endpoint, mark_uploaded, label)
+            elif response.status_code in (403, 413) and len(logs) == 1:
+                self._upload_sanitized_log_row(logs[0], endpoint, mark_uploaded, label, response.status_code)
             else:
                 print(f"[{self.node_id}] {label} upload returned {response.status_code}: {response.text[:120]}")
         except requests.exceptions.RequestException as exc:
             print(f"[{self.node_id}] {label} upload failed: {exc}")
+
+    def _row_to_upload_log(self, row):
+        return {
+            "timestamp": row[1],
+            "attacker_ip": row[2],
+            "protocol": row[3],
+            "request_data": row[4],
+            "response_data": row[5],
+            "metadata": row[6],
+        }
+
+    def _upload_sanitized_log_row(self, row, endpoint, mark_uploaded, label, original_status):
+        sanitized = self._row_to_upload_log(row)
+        original_meta = sanitized.get("metadata")
+        meta = {}
+        try:
+            meta = json.loads(original_meta) if original_meta else {}
+            if not isinstance(meta, dict):
+                meta = {"original_metadata_type": type(meta).__name__}
+        except Exception:
+            meta = {"original_metadata_parse_error": True}
+
+        meta["_upload_note"] = f"raw payload omitted after upstream {original_status}"
+        meta["_original_request_bytes"] = len(str(sanitized.get("request_data") or ""))
+        meta["_original_response_bytes"] = len(str(sanitized.get("response_data") or ""))
+        meta.pop("_unified_entry", None)
+        sanitized["request_data"] = ""
+        sanitized["response_data"] = ""
+        sanitized["metadata"] = json.dumps(meta, ensure_ascii=False)
+
+        try:
+            response = requests.post(
+                f"{self.server_url}{endpoint}",
+                json={"node_id": self.node_id, "logs": [sanitized]},
+                headers=self._auth_headers(),
+                timeout=self.request_timeout,
+            )
+            if response.status_code == 200:
+                mark_uploaded([row[0]])
+                print(f"[{self.node_id}] {label} row {row[0]} uploaded sanitized after {original_status}")
+            else:
+                print(f"[{self.node_id}] {label} row {row[0]} sanitized upload returned {response.status_code}: {response.text[:120]}")
+        except requests.exceptions.RequestException as exc:
+            print(f"[{self.node_id}] {label} row {row[0]} sanitized upload failed: {exc}")
 
     def _upload_whitelist_logs(self):
         logs = self.db.get_whitelist_logs(limit=self.upload_batch_size)

@@ -1,38 +1,46 @@
-# MQTT — suspicious CONNECT / wildcard subscriptions
-#
-# Catches admin/root/test username probes and topic enumeration via the
-# `#` / `+` wildcards (used by attackers to discover all topics on a
-# broker).
-name: MQTT Suspicious Activity
+# MQTT suspicious usernames, subscriptions, publishes and topic enumeration.
+name: MQTT Suspicious Username Topic Publish Subscribe
 type: any
 index: honeypot-*
 
 filter:
   - query:
       query_string:
-        query: >
-          protocol:mqtt AND (
-            mqtt_username:(admin OR root OR test OR guest OR mqtt OR user) OR
-            mqtt_topic:"#" OR
-            mqtt_topic:"+" OR
-            mqtt_topic:"\$SYS\/*"
-          )
+        query: 'protocol:mqtt'
+  - bool:
+      minimum_should_match: 1
+      should:
+        - query_string:
+            query: 'mqtt_username:(admin OR root OR test OR guest OR mqtt OR user OR default OR anonymous)'
+        - query_string:
+            query: 'mqtt_packet_type_name:(SUBSCRIBE OR PUBLISH OR UNSUBSCRIBE)'
+        - wildcard: {mqtt_topic: "#"}
+        - wildcard: {mqtt_topic: "+"}
+        - wildcard: {mqtt_topic: "$SYS*"}
+        - wildcard: {mqtt_topic: "*admin*"}
+        - wildcard: {mqtt_topic: "*root*"}
+        - wildcard: {mqtt_topic: "*test*"}
+        - wildcard: {mqtt_topic: "*cmd*"}
+        - wildcard: {mqtt_topic: "*command*"}
+        - range:
+            mqtt_payload_length:
+              gt: 0
 
 realert:
   minutes: 5
 query_key:
   - attacker_ip
+  - mqtt_packet_type_name
 
 alert:
   - post
-
 http_post_url: "${SERVER_INGEST_URL}"
 http_post_headers:
   X-Api-Key: "${API_KEY}"
 http_post_static_payload:
-  signature: "MQTT auth/topic enumeration"
+  signature: "MQTT suspicious username/topic publish/subscribe"
   signature_id: 7000401
-  category: "Attempted Information Leak"
+  category: "MQTT Suspicious Activity"
   severity: 2
   source: "elastalert"
 http_post_payload:
@@ -47,3 +55,4 @@ http_post_payload:
   mqtt_username: mqtt_username
   mqtt_topic: mqtt_topic
   mqtt_packet_type_name: mqtt_packet_type_name
+  mqtt_payload_length: mqtt_payload_length

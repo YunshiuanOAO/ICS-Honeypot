@@ -496,6 +496,7 @@ fi
 
 info "Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
+PYTHON_BIN="$VENV_DIR/bin/python"
 
 REQ_FILE="$REPO_ROOT/requirements.txt"
 if [ -f "$REQ_FILE" ]; then
@@ -594,7 +595,7 @@ if [ "$DAEMON_MODE" = true ]; then
     echo -e "  Stop:      ${CYAN}$0 stop${NC}"
     echo -e "${GREEN}==========================================${NC}"
     echo ""
-    nohup python3 main.py >> "$LOG_FILE" 2>&1 &
+    nohup "$PYTHON_BIN" main.py >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     ok "Server started in background (PID $!)"
     ok "View logs: $0 logs"
@@ -603,5 +604,5 @@ else
     echo -e "${GREEN}==========================================${NC}"
     echo ""
     echo $$ > "$PID_FILE"
-    python3 main.py
+    "$PYTHON_BIN" main.py
 fi

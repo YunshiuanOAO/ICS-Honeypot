@@ -1,0 +1,65 @@
+# HTTP scanner / recon probes against exposed web honeypots.
+name: HTTP Scanner / Sensitive Path Probe
+type: any
+index: honeypot-*
+
+filter:
+  - query:
+      query_string:
+        query: 'protocol:http'
+  - bool:
+      minimum_should_match: 1
+      should:
+        - wildcard: {http_path: "*.env*"}
+        - wildcard: {http_path: "*/.env*"}
+        - wildcard: {http_path: "*/.git*"}
+        - wildcard: {http_path: "*/config*"}
+        - wildcard: {http_path: "*/backup*"}
+        - wildcard: {http_path: "*/admin*"}
+        - wildcard: {http_path: "*/login*"}
+        - wildcard: {http_path: "*/wp-admin*"}
+        - wildcard: {http_path: "*/wp-login*"}
+        - wildcard: {http_path: "*/phpmyadmin*"}
+        - wildcard: {http_path: "*/etc/passwd*"}
+        - wildcard: {http_path: "*..*"}
+        - wildcard: {http_path: "*/shell*"}
+        - wildcard: {http_path: "*/cmd*"}
+        - wildcard: {http_path: "*/boaform*"}
+        - wildcard: {http_user_agent: "*sqlmap*"}
+        - wildcard: {http_user_agent: "*nuclei*"}
+        - wildcard: {http_user_agent: "*nikto*"}
+        - wildcard: {http_user_agent: "*masscan*"}
+        - wildcard: {http_user_agent: "*gobuster*"}
+        - wildcard: {http_user_agent: "*dirbuster*"}
+        - wildcard: {http_user_agent: "*zgrab*"}
+
+realert:
+  minutes: 10
+query_key:
+  - attacker_ip
+  - http_path
+
+alert:
+  - post
+http_post_url: "${SERVER_INGEST_URL}"
+http_post_headers:
+  X-Api-Key: "${API_KEY}"
+http_post_static_payload:
+  signature: "HTTP scanner or sensitive path probe"
+  signature_id: 7000301
+  category: "Web Application Attack"
+  severity: 2
+  source: "elastalert"
+http_post_payload:
+  attacker_ip: attacker_ip
+  node_id: node_id
+  protocol: protocol
+  timestamp: "@timestamp"
+  src_ip: src_ip
+  src_port: src_port
+  dst_ip: dst_ip
+  dst_port: dst_port
+  http_method: http_method
+  http_path: http_path
+  http_uri: http_uri
+  http_user_agent: http_user_agent

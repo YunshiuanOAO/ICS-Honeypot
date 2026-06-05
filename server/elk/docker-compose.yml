@@ -70,7 +70,7 @@ services:
         python3 /opt/elastalert/render-rules.py &&
         # Wait for ES to be reachable (max 60s) before initializing or starting.
         for i in $$(seq 1 30); do
-          if wget -q -O- http://elasticsearch:9200/_cluster/health > /dev/null 2>&1; then
+          if python3 -c "import urllib.request; urllib.request.urlopen('http://elasticsearch:9200/_cluster/health', timeout=2).read()" > /dev/null 2>&1; then
             echo "[entrypoint] elasticsearch is reachable"; break
           fi
           echo "[entrypoint] waiting for elasticsearch ($$i/30)..."; sleep 2

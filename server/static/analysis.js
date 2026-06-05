@@ -159,6 +159,7 @@
         if (inFlightController) inFlightController.abort();
         inFlightController = new AbortController();
         const controller = inFlightController;
+        const timeoutId = setTimeout(() => controller.abort("timeout"), 10000);
 
         const url = buildAnalysisQuery();
         console.debug("[analysis] fetching", url);
@@ -185,7 +186,11 @@
             setStaleBanner(false);
             renderIpAnalysisRows(applySearchFilter(lastFetchedRows));
         } catch (e) {
-            if (e.name === "AbortError") return;
+            if (e.name === "AbortError" && controller === inFlightController) {
+                e = new Error("Request timed out");
+            } else if (e.name === "AbortError") {
+                return;
+            }
             consecutiveFailures++;
             console.warn(`ip_analysis fetch failed (#${consecutiveFailures}):`, e.message || e);
 
@@ -207,6 +212,7 @@
                 if (typeof lucide !== "undefined") lucide.createIcons();
             }
         } finally {
+            clearTimeout(timeoutId);
             if (controller === inFlightController) inFlightController = null;
         }
     }

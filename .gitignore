@@ -32,6 +32,8 @@ pip-delete-this-directory.txt
 # Databases
 # ============================
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 
 # ============================
@@ -66,6 +68,7 @@ server/whitelist.json
 # Logs & PID files
 # ============================
 *.log
+*.log.*
 *.pid
 .server.pid
 .agent.pid
