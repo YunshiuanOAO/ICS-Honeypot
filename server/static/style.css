@@ -2515,6 +2515,13 @@ input:checked + .slider::before {
     .ip-range-sep { display: none; }
     .ip-analysis-datetime { min-width: 140px; }
     .ip-range-clear { border-left: none; border-top: 1px solid var(--border); width: 100%; height: 30px; }
+    .ip-analysis-summarybar { grid-template-columns: 1fr; }
+    .ip-analysis-panel { padding: 1rem; }
+    .ip-analysis-actions { width: 100%; }
+    .ip-analysis-select,
+    .ip-analysis-search { flex: 1 1 150px; }
+    .ip-analysis-pagination { justify-content: space-between; }
+    .ip-analysis-page-status { order: -1; width: 100%; }
 }
 
 .ip-analysis-stale {
@@ -2546,15 +2553,257 @@ input:checked + .slider::before {
     background: rgba(245, 158, 11, 0.15);
     border-color: var(--warning);
 }
+
+.ip-analysis-progress {
+    border: 1px solid rgba(59, 130, 246, 0.24);
+    background: rgba(59, 130, 246, 0.08);
+    border-radius: var(--radius-sm);
+    padding: 0.65rem 0.85rem;
+    margin-bottom: 0.85rem;
+}
+
+.ip-analysis-progress[hidden] {
+    display: none;
+}
+
+.ip-analysis-progress-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+}
+
+.ip-analysis-progress-meta span:first-child {
+    color: var(--text-primary);
+}
+
+.ip-analysis-progress-track {
+    position: relative;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.22);
+}
+
+.ip-analysis-progress-bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 38%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgba(14, 165, 233, 0.35), rgba(59, 130, 246, 0.95), rgba(14, 165, 233, 0.35));
+    animation: ipAnalysisProgressSlide 1.15s ease-in-out infinite;
+}
+
+@keyframes ipAnalysisProgressSlide {
+    0% { transform: translateX(-110%); }
+    100% { transform: translateX(280%); }
+}
+
 @keyframes ipStaleFade {
     from { opacity: 0; transform: translateY(-4px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 
 .ip-analysis-grid {
+    display: block;
+}
+
+.ip-analysis-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.ip-analysis-summarybar {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 0.75rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.ip-analysis-summaryitem {
+    min-width: 0;
+    border: 1px solid var(--border);
+    background: rgba(148, 163, 184, 0.06);
+    border-radius: var(--radius-sm);
+    padding: 0.7rem 0.85rem;
+}
+
+.ip-analysis-summaryitem strong {
+    display: block;
+    color: var(--text-primary);
+    font-size: 1rem;
+    line-height: 1.2;
+}
+
+.ip-analysis-summaryitem span {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    margin-top: 0.15rem;
+}
+
+.ip-analysis-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+}
+
+.ip-analysis-table {
+    width: 100%;
+    min-width: 980px;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.83rem;
+}
+
+.ip-analysis-table th,
+.ip-analysis-table td {
+    padding: 0.7rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.ip-analysis-table th:nth-child(1),
+.ip-analysis-table td:nth-child(1) { width: 190px; }
+.ip-analysis-table th:nth-child(2),
+.ip-analysis-table td:nth-child(2) { width: 105px; }
+.ip-analysis-table th:nth-child(3),
+.ip-analysis-table td:nth-child(3) { width: 180px; }
+.ip-analysis-table th:nth-child(4),
+.ip-analysis-table td:nth-child(4) { width: 180px; }
+.ip-analysis-table th:nth-child(5),
+.ip-analysis-table td:nth-child(5) { width: 130px; }
+.ip-analysis-table th:nth-child(6),
+.ip-analysis-table td:nth-child(6) { width: 190px; }
+.ip-analysis-table th:nth-child(7),
+.ip-analysis-table td:nth-child(7) { width: 120px; }
+
+.ip-analysis-table td {
+    color: var(--text-primary);
+}
+
+.ip-analysis-table th {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    background: rgba(148, 163, 184, 0.08);
+}
+
+.ip-analysis-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.ip-analysis-row {
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ip-analysis-row:hover {
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.ip-analysis-row.sev-high { border-left-color: var(--danger); }
+.ip-analysis-row.sev-med { border-left-color: var(--warning); }
+.ip-analysis-row.sev-low { border-left-color: var(--info); }
+
+.ip-analysis-ip-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.ip-analysis-ip-cell code {
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ip-analysis-ip-cell i {
+    width: 14px;
+    height: 14px;
+    color: var(--accent);
+    flex-shrink: 0;
+}
+
+.ip-analysis-number {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-primary);
+    text-align: right;
+}
+
+.ip-analysis-node-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.ip-analysis-alert-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 24px;
+    border-radius: 999px;
+    padding: 0.15rem 0.45rem;
+    color: var(--text-secondary);
+    background: rgba(148, 163, 184, 0.08);
+}
+
+.ip-analysis-alert-cell i {
+    width: 13px;
+    height: 13px;
+}
+
+.ip-analysis-alert-cell.sev-high {
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.12);
+}
+
+.ip-analysis-alert-cell.sev-med {
+    color: var(--warning);
+    background: rgba(245, 158, 11, 0.12);
+}
+
+.ip-analysis-alert-cell.sev-low {
+    color: var(--info);
+    background: rgba(59, 130, 246, 0.12);
+}
+
+.ip-analysis-last-seen {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ip-analysis-pagination {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.ip-analysis-pagination .btn[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.ip-analysis-page-status {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
 }
 
 .ip-card {
@@ -2969,6 +3218,26 @@ input:checked + .slider::before {
     overflow: hidden;
 }
 
+.packet-row.packet-elastalert-match {
+    border-left: 4px solid var(--info);
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.packet-row.packet-elastalert-match.sev-high {
+    border-left-color: var(--danger);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.packet-row.packet-elastalert-match.sev-med {
+    border-left-color: var(--warning);
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.packet-row.packet-elastalert-match.sev-low {
+    border-left-color: var(--info);
+    background: rgba(59, 130, 246, 0.08);
+}
+
 .packet-row > summary {
     list-style: none;
     cursor: pointer;
@@ -2981,6 +3250,31 @@ input:checked + .slider::before {
 }
 .packet-row > summary::-webkit-details-marker { display: none; }
 .packet-row[open] > summary { border-bottom: 1px solid var(--border); }
+
+.packet-alert-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(148, 163, 184, 0.12);
+    color: var(--text-secondary);
+    font-size: 0.66rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.packet-alert-tag i {
+    width: 12px;
+    height: 12px;
+}
+
+.packet-alert-source {
+    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.12);
+    color: #34d399;
+}
 
 .packet-time {
     font-family: 'JetBrains Mono', monospace;
@@ -2999,6 +3293,35 @@ input:checked + .slider::before {
 .packet-body {
     padding: 0.7rem 0.9rem;
     background: var(--bg-input);
+}
+
+.packet-alert-details {
+    display: grid;
+    gap: 0.35rem;
+    margin-bottom: 0.65rem;
+}
+
+.packet-alert-detail {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: var(--radius-sm);
+    background: rgba(148, 163, 184, 0.08);
+    font-size: 0.75rem;
+}
+
+.packet-alert-detail strong {
+    color: var(--text-primary);
+    font-weight: 650;
+    flex: 1;
+}
+
+.packet-alert-detail > span:last-child {
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
 }
 
 .packet-kv {
@@ -3050,4 +3373,3 @@ input:checked + .slider::before {
     .ip-modal-header, .ip-modal-tabs, .ip-modal-body { padding-left: 1rem; padding-right: 1rem; }
     .packet-time { display: none; }
 }
-

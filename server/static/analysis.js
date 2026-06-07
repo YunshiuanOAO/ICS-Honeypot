@@ -12,6 +12,11 @@
     let lastFetchedRows = [];
     let inFlightController = null;
     let consecutiveFailures = 0;
+    let progressTimer = null;
+    let progressStartedAt = 0;
+    let currentPage = 1;
+    let currentTotal = 0;
+    const pageSize = 100;
 
     // Suricata severity: 1=high, 2=medium, 3=low, 0=none
     const SEVERITY_LABEL = { 0: "None", 1: "High", 2: "Medium", 3: "Low" };
@@ -90,7 +95,11 @@
     function buildAnalysisQuery() {
         const windowSel = document.getElementById("ip-analysis-window");
         const value = windowSel ? windowSel.value : "";
-        const params = ["limit=500"];
+        const search = (document.getElementById("ip-analysis-search")?.value || "").trim();
+        const hideAgentIps = document.getElementById("ip-analysis-agent-filter")?.value !== "show";
+        const params = [`page=${currentPage}`, `page_size=${pageSize}`];
+        if (search) params.push(`search=${encodeURIComponent(search)}`);
+        if (hideAgentIps) params.push("hide_agent_ips=true");
 
         if (value === "custom") {
             const fromIso = localDatetimeToIso(document.getElementById("ip-analysis-from")?.value || "");
@@ -101,6 +110,49 @@
             params.push(`hours=${encodeURIComponent(value)}`);
         }
         return `/api/ip_analysis?${params.join("&")}`;
+    }
+
+    function describeAnalysisWindow() {
+        const windowSel = document.getElementById("ip-analysis-window");
+        const value = windowSel ? windowSel.value : "";
+        if (value === "custom") {
+            const fromVal = document.getElementById("ip-analysis-from")?.value || "";
+            const toVal = document.getElementById("ip-analysis-to")?.value || "";
+            if (fromVal && toVal) return `Custom range: ${fromVal} to ${toVal}`;
+            if (fromVal) return `Custom range from ${fromVal}`;
+            if (toVal) return `Custom range until ${toVal}`;
+            return "Custom range";
+        }
+        if (value === "1") return "Last hour";
+        if (value === "24") return "Last 24 hours";
+        if (value === "168") return "Last 7 days";
+        return "All time";
+    }
+
+    function setAnalysisProgress(visible, text) {
+        const progress = document.getElementById("ip-analysis-progress");
+        const label = document.getElementById("ip-analysis-progress-text");
+        const elapsed = document.getElementById("ip-analysis-progress-elapsed");
+        if (!progress) return;
+
+        if (!visible) {
+            progress.hidden = true;
+            if (progressTimer) {
+                clearInterval(progressTimer);
+                progressTimer = null;
+            }
+            return;
+        }
+
+        progress.hidden = false;
+        progressStartedAt = Date.now();
+        if (label) label.textContent = text || `Loading IP analysis (${describeAnalysisWindow()})…`;
+        if (elapsed) elapsed.textContent = "0s";
+        if (progressTimer) clearInterval(progressTimer);
+        progressTimer = setInterval(() => {
+            if (!elapsed) return;
+            elapsed.textContent = `${Math.max(0, Math.floor((Date.now() - progressStartedAt) / 1000))}s`;
+        }, 250);
     }
 
     function updateCustomVisibility() {
@@ -155,13 +207,18 @@
             if (typeof lucide !== "undefined") lucide.createIcons();
         }
 
-        // Cancel any prior in-flight request — only one refresh at a time.
-        if (inFlightController) inFlightController.abort();
+        // Only one refresh at a time. Aborting a browser request does not
+        // reliably cancel the PostgreSQL query, so skip overlapping refreshes.
+        if (inFlightController) {
+            console.debug("[analysis] refresh already in flight");
+            return;
+        }
         inFlightController = new AbortController();
         const controller = inFlightController;
-        const timeoutId = setTimeout(() => controller.abort("timeout"), 10000);
+        const timeoutId = setTimeout(() => controller.abort("timeout"), 60000);
 
         const url = buildAnalysisQuery();
+        setAnalysisProgress(true, `Loading IP analysis (${describeAnalysisWindow()})…`);
         console.debug("[analysis] fetching", url);
 
         try {
@@ -179,12 +236,15 @@
                 throw new Error(`Unexpected response (${ct.split(";")[0] || "non-JSON"})`);
             }
 
-            const rows = await resp.json();
-            console.debug("[analysis] got", rows.length, "rows");
+            const payload = await resp.json();
+            const rows = Array.isArray(payload) ? payload : (payload.rows || []);
+            currentTotal = Array.isArray(payload) ? rows.length : Number(payload.total || 0);
+            currentPage = Array.isArray(payload) ? 1 : Number(payload.page || currentPage);
+            console.debug("[analysis] got", rows.length, "rows of", currentTotal);
             lastFetchedRows = Array.isArray(rows) ? rows : [];
             consecutiveFailures = 0;
             setStaleBanner(false);
-            renderIpAnalysisRows(applySearchFilter(lastFetchedRows));
+            renderIpAnalysisRows(lastFetchedRows);
         } catch (e) {
             if (e.name === "AbortError" && controller === inFlightController) {
                 e = new Error("Request timed out");
@@ -200,11 +260,11 @@
             // never managed to load anything.
             if (lastFetchedRows.length) {
                 setStaleBanner(true, `Couldn't refresh (${e.message || "error"}) — showing last good data`);
-            } else if (consecutiveFailures >= 3) {
+            } else {
                 grid.innerHTML = `
                     <div class="table-empty-state">
                         <i data-lucide="alert-circle"></i>
-                        <p>Failed to load IP analysis</p>
+                        <p>Failed to load IP analysis${e.message ? `: ${escapeHtml(e.message)}` : ""}</p>
                         <button class="btn btn-secondary btn-sm" onclick="refreshIpAnalysis()">
                             <i data-lucide="refresh-cw"></i><span>Retry</span>
                         </button>
@@ -213,15 +273,11 @@
             }
         } finally {
             clearTimeout(timeoutId);
-            if (controller === inFlightController) inFlightController = null;
+            if (controller === inFlightController) {
+                inFlightController = null;
+                setAnalysisProgress(false);
+            }
         }
-    }
-
-    function applySearchFilter(rows) {
-        const search = document.getElementById("ip-analysis-search");
-        const term = (search?.value || "").trim().toLowerCase();
-        if (!term) return rows;
-        return rows.filter(r => (r.ip || "").toLowerCase().includes(term));
     }
 
     function renderIpAnalysisRows(rows) {
@@ -233,6 +289,10 @@
             if (typeof lucide !== "undefined") lucide.createIcons();
             return;
         }
+
+        const totalPages = Math.max(1, Math.ceil(currentTotal / pageSize));
+        const from = currentTotal ? ((currentPage - 1) * pageSize) + 1 : 0;
+        const to = Math.min(currentPage * pageSize, currentTotal);
 
         const html = rows.map(row => {
             const sev = Number(row.max_severity || 0);
@@ -247,51 +307,84 @@
 
             const nodes = (row.node_ids || []).filter(Boolean);
             const nodeText = nodes.length ? nodes.join(", ") : "—";
-
-            const alertBadge = row.alert_count > 0
-                ? `<div class="ip-card-alert ${sevClass}">
-                       <i data-lucide="shield-alert"></i>
-                       <span>${row.alert_count} alert${row.alert_count === 1 ? "" : "s"}</span>
-                       <span class="ip-card-sev-pill">${sevLabel}</span>
-                   </div>`
-                : `<div class="ip-card-alert sev-none">
-                       <i data-lucide="shield-check"></i>
-                       <span>No alerts</span>
-                   </div>`;
+            const packets = Number(row.total_packets || 0);
+            const alertText = row.alert_count > 0 ? `${row.alert_count} ${sevLabel}` : "None";
 
             return `
-                <div class="ip-card" data-ip="${escapeHtml(row.ip || "")}" onclick="openIpModal('${escapeHtml(row.ip || "")}')">
-                    <div class="ip-card-head">
-                        <div class="ip-card-ip">
+                <tr class="ip-analysis-row ${sevClass}" data-ip="${escapeHtml(row.ip || "")}" onclick="openIpModal('${escapeHtml(row.ip || "")}')">
+                    <td>
+                        <div class="ip-analysis-ip-cell">
                             <i data-lucide="globe-2"></i>
-                            <span>${escapeHtml(row.ip || "—")}</span>
+                            <code>${escapeHtml(row.ip || "—")}</code>
                             ${isPrivateIp(row.ip) ? '<span class="ip-card-tag">Private</span>' : ""}
                         </div>
-                        ${alertBadge}
-                    </div>
-                    <div class="ip-card-body">
-                        <div class="ip-card-stat">
-                            <span class="ip-card-stat-label">Packets</span>
-                            <span class="ip-card-stat-value">${row.total_packets || 0}</span>
+                    </td>
+                    <td class="ip-analysis-number">${packets.toLocaleString()}</td>
+                    <td><div class="ip-card-protos">${protoBadges || "—"}</div></td>
+                    <td class="ip-analysis-node-cell" title="${escapeHtml(nodeText)}">${escapeHtml(nodeText)}</td>
+                    <td>
+                        <div class="ip-analysis-alert-cell ${sevClass}">
+                            <i data-lucide="${row.alert_count > 0 ? "shield-alert" : "shield-check"}"></i>
+                            <span>${escapeHtml(alertText)}</span>
                         </div>
-                        <div class="ip-card-stat">
-                            <span class="ip-card-stat-label">Protocols</span>
-                            <span class="ip-card-stat-value ip-card-protos">${protoBadges || "—"}</span>
-                        </div>
-                        <div class="ip-card-stat">
-                            <span class="ip-card-stat-label">Agents</span>
-                            <span class="ip-card-stat-value ip-card-nodes" title="${escapeHtml(nodeText)}">${escapeHtml(nodeText)}</span>
-                        </div>
-                        <div class="ip-card-stat">
-                            <span class="ip-card-stat-label">Last seen</span>
-                            <span class="ip-card-stat-value" title="${escapeHtml(formatTime(row.last_seen))}">${escapeHtml(formatRelative(row.last_seen))}</span>
-                        </div>
-                    </div>
-                </div>`;
+                    </td>
+                    <td title="${escapeHtml(formatTime(row.first_seen))}">${escapeHtml(formatTime(row.first_seen))}</td>
+                    <td title="${escapeHtml(formatTime(row.last_seen))}">
+                        <span class="ip-analysis-last-seen">${escapeHtml(formatRelative(row.last_seen))}</span>
+                    </td>
+                </tr>`;
         }).join("");
 
-        grid.innerHTML = html;
+        grid.innerHTML = `
+            <div class="ip-analysis-results">
+                <div class="ip-analysis-summarybar">
+                    <div class="ip-analysis-summaryitem">
+                        <strong>${currentTotal.toLocaleString()}</strong>
+                        <span>Attacker IPs</span>
+                    </div>
+                    <div class="ip-analysis-summaryitem">
+                        <strong>${from.toLocaleString()}-${to.toLocaleString()}</strong>
+                        <span>Current page</span>
+                    </div>
+                    <div class="ip-analysis-summaryitem">
+                        <strong>${currentPage.toLocaleString()} / ${totalPages.toLocaleString()}</strong>
+                        <span>Pages</span>
+                    </div>
+                </div>
+                <div class="ip-analysis-table-wrap">
+                    <table class="ip-analysis-table">
+                        <thead>
+                            <tr>
+                                <th>Attacker IP</th>
+                                <th>Packets</th>
+                                <th>Protocols</th>
+                                <th>Agents</th>
+                                <th>Alerts</th>
+                                <th>First Seen</th>
+                                <th>Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody>${html}</tbody>
+                    </table>
+                </div>
+                <div class="ip-analysis-pagination">
+                    <button type="button" class="btn btn-secondary btn-sm" ${currentPage <= 1 ? "disabled" : ""} onclick="changeIpAnalysisPage(-1)">
+                        <i data-lucide="chevron-left"></i><span>Previous</span>
+                    </button>
+                    <span class="ip-analysis-page-status">Showing ${from.toLocaleString()}-${to.toLocaleString()} of ${currentTotal.toLocaleString()}</span>
+                    <button type="button" class="btn btn-secondary btn-sm" ${currentPage >= totalPages ? "disabled" : ""} onclick="changeIpAnalysisPage(1)">
+                        <span>Next</span><i data-lucide="chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        `;
         if (typeof lucide !== "undefined") lucide.createIcons();
+    }
+
+    function changeIpAnalysisPage(delta) {
+        const totalPages = Math.max(1, Math.ceil(currentTotal / pageSize));
+        currentPage = Math.max(1, Math.min(totalPages, currentPage + delta));
+        refreshIpAnalysis();
     }
 
     // ─── IP detail modal ────────────────────────────────────────────
@@ -325,7 +418,7 @@
 
             renderModalOverview(ip, logs, alerts, geo);
             renderModalAlerts(alerts);
-            renderModalPackets(logs);
+            renderModalPackets(logs, alerts);
 
             const protos = new Set(logs.map(l => l.protocol).filter(Boolean));
             subtitle.textContent = geo
@@ -463,9 +556,86 @@
         }).join("");
 
         container.innerHTML = html;
+        if (typeof lucide !== "undefined") lucide.createIcons({ root: container });
     }
 
-    function renderModalPackets(logs) {
+    function toTimeMs(ts) {
+        if (!ts) return NaN;
+        const ms = Date.parse(ts);
+        return Number.isNaN(ms) ? NaN : ms;
+    }
+
+    function getLogNetwork(meta) {
+        const unifiedNetwork = meta?._unified_entry?.network || {};
+        return {
+            src_port: unifiedNetwork.src_port ?? meta.src_port,
+            dst_port: unifiedNetwork.dst_port ?? meta.dst_port,
+            src_ip: unifiedNetwork.src_ip ?? meta.src_ip,
+            dst_ip: unifiedNetwork.dst_ip ?? meta.dst_ip,
+        };
+    }
+
+    function buildPacketAlertMatches(logs, alerts) {
+        const elastAlerts = (alerts || []).filter(a => (a.source || "").toLowerCase() === "elastalert");
+        const matches = new Map();
+        if (!elastAlerts.length) return matches;
+
+        logs.forEach(log => {
+            const logMeta = parseMaybeJson(log.metadata) || {};
+            const logNetwork = getLogNetwork(logMeta);
+            const logTime = toTimeMs(log.timestamp);
+            const hitAlerts = elastAlerts.filter(alert => {
+                if (alert.log_id && log.id && Number(alert.log_id) === Number(log.id)) return true;
+                const alertMeta = parseMaybeJson(alert.metadata) || {};
+                const alertTime = toTimeMs(alert.timestamp || alertMeta.timestamp);
+                if (!Number.isNaN(logTime) && !Number.isNaN(alertTime) && Math.abs(logTime - alertTime) > 3000) {
+                    return false;
+                }
+                if (alert.node_id && log.node_id && alert.node_id !== log.node_id) return false;
+                if (alert.protocol && log.protocol && alert.protocol !== log.protocol) return false;
+
+                const srcPort = alert.src_port || alertMeta.src_port;
+                const dstPort = alert.dst_port || alertMeta.dst_port;
+                if (srcPort && logNetwork.src_port && Number(srcPort) !== Number(logNetwork.src_port)) return false;
+                if (dstPort && logNetwork.dst_port && Number(dstPort) !== Number(logNetwork.dst_port)) return false;
+
+                return true;
+            });
+            if (hitAlerts.length) matches.set(log.id, hitAlerts);
+        });
+        return matches;
+    }
+
+    function renderPacketAlertMarkers(alerts) {
+        if (!alerts?.length) return "";
+        const maxSev = Math.min(...alerts.map(a => Number(a.severity) || 3));
+        const sevClass = SEVERITY_CLASS[maxSev] || SEVERITY_CLASS[3];
+        const sevLabel = SEVERITY_LABEL[maxSev] || "Low";
+        return `
+            <span class="packet-alert-tag packet-alert-source">
+                <i data-lucide="bell-ring"></i> ElastAlert
+            </span>
+            <span class="packet-alert-tag ${sevClass}">${escapeHtml(sevLabel)}</span>
+            ${alerts.length > 1 ? `<span class="packet-alert-tag">+${alerts.length - 1}</span>` : ""}`;
+    }
+
+    function renderPacketAlertDetails(alerts) {
+        if (!alerts?.length) return "";
+        const rows = alerts.map(alert => {
+            const sev = Number(alert.severity) || 3;
+            const sevClass = SEVERITY_CLASS[sev] || SEVERITY_CLASS[3];
+            const sevLabel = SEVERITY_LABEL[sev] || "Low";
+            return `
+                <div class="packet-alert-detail ${sevClass}">
+                    <span class="alert-sev-pill ${sevClass}">${escapeHtml(sevLabel)}</span>
+                    <strong>${escapeHtml(alert.signature || "ElastAlert match")}</strong>
+                    <span>${escapeHtml(formatTime(alert.timestamp))}</span>
+                </div>`;
+        }).join("");
+        return `<div class="packet-alert-details">${rows}</div>`;
+    }
+
+    function renderModalPackets(logs, alerts = []) {
         const container = document.getElementById("ip-modal-packets");
         document.getElementById("ip-modal-packets-badge").textContent = logs.length;
 
@@ -475,22 +645,29 @@
             return;
         }
 
+        const alertMatches = buildPacketAlertMatches(logs, alerts);
         const html = logs.map(l => {
             const meta = parseMaybeJson(l.metadata) || {};
+            const network = getLogNetwork(meta);
             const protoCls = PROTOCOL_CLASS[(l.protocol || "").toLowerCase()] || "proto-default";
             const summary = meta["log.message"] || meta["log_message"] || meta["mqtt_packet_type_name"] || meta["http_method"] || meta["modbus_function_name"] || "";
             const req = l.request_data || "";
             const resp = l.response_data || "";
+            const matchedAlerts = alertMatches.get(l.id) || [];
+            const maxSev = matchedAlerts.length ? Math.min(...matchedAlerts.map(a => Number(a.severity) || 3)) : 0;
+            const matchClass = matchedAlerts.length ? `packet-elastalert-match ${SEVERITY_CLASS[maxSev] || "sev-low"}` : "";
 
             return `
-                <details class="packet-row">
+                <details class="packet-row ${matchClass}">
                     <summary>
                         <span class="proto-badge ${protoCls}">${escapeHtml((l.protocol || "?").toUpperCase())}</span>
                         <span class="packet-time">${escapeHtml(formatTime(l.timestamp))}</span>
                         <span class="packet-summary">${escapeHtml(summary || "packet")}</span>
-                        <span class="packet-port">${escapeHtml((meta.src_port ?? "") + "→" + (meta.dst_port ?? ""))}</span>
+                        ${renderPacketAlertMarkers(matchedAlerts)}
+                        <span class="packet-port">${escapeHtml((network.src_port ?? "") + "→" + (network.dst_port ?? ""))}</span>
                     </summary>
                     <div class="packet-body">
+                        ${renderPacketAlertDetails(matchedAlerts)}
                         <div class="packet-kv"><span>Node</span><code>${escapeHtml(l.node_id || "—")}</code></div>
                         <div class="packet-kv"><span>Request</span><code class="packet-data">${escapeHtml(req || "—")}</code></div>
                         <div class="packet-kv"><span>Response</span><code class="packet-data">${escapeHtml(resp || "—")}</code></div>
@@ -536,24 +713,40 @@
     document.addEventListener("DOMContentLoaded", () => {
         const search = document.getElementById("ip-analysis-search");
         if (search) {
+            let searchTimer = null;
             search.addEventListener("input", () => {
-                renderIpAnalysisRows(applySearchFilter(lastFetchedRows));
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(() => {
+                    currentPage = 1;
+                    refreshIpAnalysis();
+                }, 300);
             });
         }
         const windowSel = document.getElementById("ip-analysis-window");
         if (windowSel) {
             windowSel.addEventListener("change", () => {
                 updateCustomVisibility();
+                currentPage = 1;
                 refreshIpAnalysis();
             });
             updateCustomVisibility();
+        }
+        const agentFilter = document.getElementById("ip-analysis-agent-filter");
+        if (agentFilter) {
+            agentFilter.addEventListener("change", () => {
+                currentPage = 1;
+                refreshIpAnalysis();
+            });
         }
 
         // Custom range — debounce so dragging the picker doesn't spam the API
         let customRefreshTimer = null;
         const scheduleCustomRefresh = () => {
             clearTimeout(customRefreshTimer);
-            customRefreshTimer = setTimeout(refreshIpAnalysis, 350);
+            customRefreshTimer = setTimeout(() => {
+                currentPage = 1;
+                refreshIpAnalysis();
+            }, 350);
         };
         ["ip-analysis-from", "ip-analysis-to"].forEach(id => {
             const el = document.getElementById(id);
@@ -567,6 +760,7 @@
                 const to = document.getElementById("ip-analysis-to");
                 if (from) from.value = "";
                 if (to) to.value = "";
+                currentPage = 1;
                 refreshIpAnalysis();
             });
         }
@@ -582,6 +776,7 @@
 
     // Expose for inline onclick handlers
     window.refreshIpAnalysis = refreshIpAnalysis;
+    window.changeIpAnalysisPage = changeIpAnalysisPage;
     window.openIpModal = openIpModal;
     window.closeIpModal = closeIpModal;
     window.switchIpTab = switchIpTab;

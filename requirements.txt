@@ -8,3 +8,4 @@ aiosqlite
 aiofiles
 itsdangerous
 python-dotenv
+asyncpg

@@ -9,6 +9,7 @@ from typing import List, Dict, Optional, Any
 import uvicorn
 import os
 import shutil
+import sqlite3
 import uuid
 import zipfile
 import json
@@ -18,6 +19,7 @@ import urllib.error
 from pathlib import Path
 from datetime import datetime
 from database import ServerDB
+from postgres_database import PostgresServerDB
 from auth_config import load_secrets, verify_password, verify_api_key
 from package_generators import (
     SUPPORTED_PROTOCOLS,
@@ -28,9 +30,13 @@ from package_generators import (
 # Resolve paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "server.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
-db = ServerDB(DB_PATH)
+if DATABASE_URL.startswith(("postgres://", "postgresql://")):
+    db = PostgresServerDB(DATABASE_URL)
+else:
+    db = ServerDB(DB_PATH)
 
 
 # --- Per-agent whitelist ---------------------------------------------------
@@ -988,9 +994,21 @@ async def reset_agent(node_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/recent_logs", dependencies=[Depends(require_session)])
-async def recent_logs():
-    logs = await db.get_recent_logs(limit=50)
+async def recent_logs(limit: str = "50"):
+    if str(limit).lower() == "all":
+        parsed_limit = 500
+    else:
+        try:
+            parsed_limit = max(1, min(int(limit), 1000))
+        except (TypeError, ValueError):
+            parsed_limit = 50
+    logs = await db.get_recent_logs(limit=parsed_limit)
     return logs
+
+
+@app.get("/api/dashboard_stats", dependencies=[Depends(require_session)])
+async def dashboard_stats():
+    return await db.get_dashboard_stats()
 
 
 # ── IP-grouped log analysis (powers the panel below the Attack Map) ──
@@ -1020,6 +1038,10 @@ def _normalize_to_utc_iso(value: Optional[str]) -> Optional[str]:
 @app.get("/api/ip_analysis", dependencies=[Depends(require_session)])
 async def ip_analysis(
     limit: int = 200,
+    page: int = 1,
+    page_size: int = 100,
+    search: Optional[str] = None,
+    hide_agent_ips: bool = False,
     hours: Optional[int] = None,
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
@@ -1038,7 +1060,35 @@ async def ip_analysis(
     elif hours:
         from datetime import timedelta, timezone
         since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    rows = await db.get_ip_summary(limit=limit, since=since, until=until)
+    try:
+        page_size = max(25, min(int(page_size or limit or 100), 500))
+        page = max(1, int(page or 1))
+        exclude_ips = await db.get_agent_ips() if hide_agent_ips else []
+        offset = (page - 1) * page_size
+        summary = await db.get_ip_summary(
+            limit=page_size,
+            offset=offset,
+            since=since,
+            until=until,
+            ip_search=(search or "").strip() or None,
+            exclude_ips=exclude_ips,
+        )
+    except sqlite3.OperationalError as e:
+        detail = str(e)
+        if "locked" in detail.lower() or "busy" in detail.lower():
+            raise HTTPException(status_code=503, detail="IP analysis database is busy; retry shortly")
+        if "interrupted" in detail.lower():
+            raise HTTPException(status_code=503, detail="IP analysis query timed out; retry with a shorter time range")
+        raise HTTPException(status_code=500, detail=f"IP analysis database error: {detail}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"IP analysis failed: {e}")
+
+    if isinstance(summary, dict):
+        rows = summary.get("rows", [])
+        total = summary.get("total", len(rows))
+    else:
+        rows = summary
+        total = len(rows)
 
     # Suricata severity is 1=high, 2=medium, 3=low. max_severity from SQL is
     # the MIN (because lower number = higher severity). Normalize null=0.
@@ -1047,7 +1097,14 @@ async def ip_analysis(
         r["max_severity"] = sev if sev else 0
         r["protocols"] = (r.get("protocols") or "").split(",") if r.get("protocols") else []
         r["node_ids"] = (r.get("node_ids") or "").split(",") if r.get("node_ids") else []
-    return rows
+    return {
+        "rows": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_next": offset + len(rows) < total,
+        "has_prev": page > 1,
+    }
 
 
 @app.get("/api/ip_details/{ip}", dependencies=[Depends(require_session)])

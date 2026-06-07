@@ -1,251 +1,204 @@
-# ICS Honeypot Platform
+<p align="right">
+  <strong>繁體中文</strong> | <a href="./README.en.md">English</a>
+</p>
 
-A distributed honeypot platform for **Industrial Control Systems**. A central server manages remote agents that deploy Docker-based honeypot packages, capture attacker traffic through protocol-aware proxies, and forward logs back for analysis — optionally indexed by an ELK stack.
+# ICS Honeypot 路燈模擬系統
+
+<p align="center">
+  <img src="./assets/distributed-honeypot-logo-white.png" alt="Distributed ICS Honeypot Logo" width="260">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/FastAPI-Server-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Docker-Honeypot-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/PostgreSQL-Database-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/SQLite-Agent_Buffer-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite">
+  <img src="https://img.shields.io/badge/MQTT-Protocol-660066?style=for-the-badge&logo=eclipsemosquitto&logoColor=white" alt="MQTT">
+  <img src="https://img.shields.io/badge/Elasticsearch-Logs-005571?style=for-the-badge&logo=elasticsearch&logoColor=white" alt="Elasticsearch">
+  <img src="https://img.shields.io/badge/Kibana-Dashboard-E8478B?style=for-the-badge&logo=kibana&logoColor=white" alt="Kibana">
+  <img src="https://img.shields.io/badge/Filebeat-Collector-005571?style=for-the-badge&logo=elastic&logoColor=white" alt="Filebeat">
+  <img src="https://img.shields.io/badge/ElastAlert-Alerting-FF6F00?style=for-the-badge" alt="ElastAlert">
+</p>
+
+## 簡介
+
+本專案是一套以 Python 建置的分散式 ICS Honeypot 路燈模擬系統，用於模擬工控設備、誘捕攻擊流量並進行集中分析。系統採用 Server 與 Honeypot Agent 分離式架構，Server 負責管理蜜罐節點、部署設定、攻擊日誌接收與儀表板展示；Agent 可部署在不同主機或網路環境中，透過 Docker 執行 MQTT、HTTP、TCP Socket、模擬 PLC 或自製 HMI 等服務。
+
+蜜罐服務前方會透過 Proxy 攔截、轉送並記錄攻擊流量，Agent 會先將資料暫存於本地 SQLite，再定時回傳至 Server。Server 端使用 PostgreSQL 儲存攻擊日誌，並可搭配 Filebeat、Elasticsearch、Kibana 與 ElastAlert 建立日誌分析、視覺化與告警機制。多個蜜罐節點之間也可互相連動，形成更接近真實工控場域的蜜網環境。
+
+## 系統架構
 
 ![architecture](./assets/arch.png)
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Honeypot Package Spec](#honeypot-package-spec)
-- [Deployment Lifecycle](#deployment-lifecycle)
-- [Proxy Layer](#proxy-layer)
-- [Logging Pipeline](#logging-pipeline)
-- [Project Structure](#project-structure)
-- [Operational Notes](#operational-notes)
-- [License](#license)
-
-## Overview
-
-The platform has three cooperating components:
-
-| Component | Role |
-|-----------|------|
-| **Server** | FastAPI control plane. Hosts the dashboard, stores agent configs and logs, exposes an agent API, and serves the package library. |
-| **Client Agent** | Runs on each honeypot node. Pulls config, materializes package files, drives `docker compose`, runs protocol proxies, and uploads logs. |
-| **ELK Stack** *(optional)* | Filebeat → Elasticsearch → Kibana pipeline that consumes the JSON logs the server writes to disk. |
-
-A **honeypot package** is just a folder of files (`Dockerfile`, `docker-compose.yml`, source code, configs). Operators author packages in the dashboard or upload zip archives; agents materialize them onto disk and run them with Docker.
-
-## Architecture
-
-```
-┌───────────────┐  HTTPS / X-Api-Key   ┌────────────────┐
-│  Server (UI)  │◀────────────────────▶│  Client Agent  │
-│  FastAPI      │   config + logs      │  NodeAgent     │
-│  SQLite       │                      │  Docker / proxy│
-└──────┬────────┘                      └────────┬───────┘
-       │ JSON logs                              │ docker compose
-       ▼                                        ▼
-   Filebeat  →  Elasticsearch  →  Kibana    Honeypot containers
+```text
+Attacker
+   |
+   v
+Honeypot Agent Node
+   |-- Proxy Layer: MQTT / HTTP / TCP / Modbus
+   |-- Docker Honeypot Services: HMI / PLC / Streetlight Simulator
+   |-- Local Buffer: SQLite
+   |
+   |  heartbeat + logs + status
+   v
+Central Server
+   |-- FastAPI Dashboard
+   |-- Agent Management
+   |-- Deployment Config
+   |-- PostgreSQL
+   |
+   v
+Filebeat -> Elasticsearch -> Kibana -> ElastAlert
 ```
 
-- **Server persistence**: `server/server.db` (aiosqlite) holds agents, package configs, and uploaded logs. JSON copies land in `server/logs/` for Filebeat ingestion.
-- **Client persistence**: `client/client_logs.db` is a local buffer for log lines awaiting upload.
-- **Auth**: dashboard uses session cookies; the agent API uses an `X-Api-Key` header. Credentials live in each side's `.env`.
+### 主要元件
 
-## Quick Start
+| 元件 | 說明 |
+| --- | --- |
+| Server | FastAPI 中央控制端，提供 Dashboard、Agent 管理、部署設定、日誌接收與查詢功能。 |
+| Honeypot Agent | 部署於各蜜罐節點，接收 Server 設定，啟動 Docker 服務並回傳狀態與攻擊日誌。 |
+| Proxy Layer | 攔截並轉送 MQTT、HTTP、TCP、Modbus 等協定流量，產生結構化攻擊事件。 |
+| Docker Services | 實際執行蜜罐服務，可部署模擬 PLC、HMI、路燈控制服務或自訂服務。 |
+| PostgreSQL / SQLite | Server 使用 PostgreSQL 儲存日誌；Agent 使用 SQLite 作為本地暫存緩衝。 |
+| ELK / ElastAlert | 使用 Filebeat、Elasticsearch、Kibana 與 ElastAlert 進行日誌分析、視覺化與告警。 |
 
-### Prerequisites
+## 功能特色
 
-- Python 3.8+
-- Docker with the `docker compose` plugin
+- 分散式架構，Server 與 Honeypot Agent 可部署於不同主機。
+- 支援多蜜罐節點互動，形成蜜網環境。
+- 可透過 Docker 快速部署自製 HMI、模擬 PLC、MQTT、HTTP、TCP Socket 等服務。
+- 使用 Proxy 攔截、轉送並記錄攻擊流量。
+- 支援 PostgreSQL、SQLite 與 JSON 日誌輸出。
+- 可整合 Filebeat、Elasticsearch、Kibana 與 ElastAlert 進行分析與告警。
+- 提供 Web Dashboard 管理 Agent、部署蜜罐套件與查看攻擊資料。
 
-### 1. Install
+## 如何安裝
+
+### 環境需求
+
+- Python 3.8 以上
+- Docker
+- Docker Compose plugin
+- Linux / Ubuntu 環境建議
+
+### 1. 下載專案
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+git clone <repo-url>
+cd ICS-Honeypot
+```
+
+### 2. 建立 Python 虛擬環境
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure secrets
+### 3. 設定 Server 環境變數
 
-Create `server/.env`:
+建立 `server/.env`：
 
 ```env
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=change-me
 API_KEY=shared-agent-key
-SESSION_SECRET=optional-but-recommended
+SESSION_SECRET=change-this-session-secret
+
+POSTGRES_DB=honeypot
+POSTGRES_USER=honeypot
+POSTGRES_PASSWORD=honeypot_change_me
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql://honeypot:honeypot_change_me@127.0.0.1:5432/honeypot
 ```
 
-Create `client/.env`:
+`API_KEY` 必須與 Client Agent 的設定一致，Agent 才能向 Server 取得部署設定並回傳日誌。
+
+### 4. 設定 Client Agent 環境變數
+
+建立 `client/.env`：
 
 ```env
 API_KEY=shared-agent-key
 ```
 
-### 3. Start the server (with ELK)
+確認 `client/client_config.json` 內的 `node_id` 與 `server_url`：
+
+```json
+{
+  "node_id": "node_01",
+  "server_url": "http://127.0.0.1:8000",
+  "deployments": []
+}
+```
+
+若 Agent 與 Server 位於不同主機，請將 `server_url` 改成 Server 的實際 IP 或網域。
+
+### 5. 啟動 Server 與分析服務
 
 ```bash
 ./server/start_services.sh
 ```
 
-- Dashboard: <http://127.0.0.1:8000>
-- Kibana: <http://localhost:5601>
+啟動後可開啟：
 
-To run the server alone (no ELK):
+- Dashboard: <http://127.0.0.1:8000>
+- Kibana: <http://127.0.0.1:5601>
+
+若只想啟動 FastAPI Server，不啟動 ELK：
 
 ```bash
-cd server && python3 main.py
+cd server
+python3 main.py
 ```
 
-### 4. Start a client agent
+### 6. 啟動 Honeypot Agent
+
+開啟另一個 terminal：
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 python3 client/main.py
 ```
 
-Edit `client/client_config.json` to set `node_id` and `server_url`. Deployments arrive from the server — leave the array empty initially.
+Agent 啟動後會向 Server 註冊並等待部署設定。可在 Dashboard 中新增或修改該 Agent 的蜜罐服務。
 
-### 5. Build a package
+### 7. 部署蜜罐服務
 
-In the dashboard, edit an agent and add a deployment. You can:
+進入 Dashboard 後，可針對 Agent 新增部署項目：
 
-- Start from a built-in template (`modbus`, `http`, `mqtt`).
-- Hand-author files (`Dockerfile`, `docker-compose.yml`, source code, configs).
-- Upload a `.zip` archive — the server extracts it, populates the file editor tree, and saves it to the **package library** for reuse by other agents.
+- 使用內建模板產生 Modbus 或 MQTT 模擬服務。
+- 上傳自訂 Docker package。
+- 編輯 `Dockerfile`、`docker-compose.yml`、程式碼與設定檔。
+- 設定 Proxy 監聽埠與後端服務埠。
 
-## Honeypot Package Spec
+部署完成後，Agent 會建立 Docker container，並開始攔截與記錄攻擊流量。
 
-Each agent config has a `deployments` array. A deployment is a self-contained package.
+## 專案結構
 
-```json
-{
-  "node_id": "node_01",
-  "server_url": "http://localhost:8000",
-  "deployments": [
-    {
-      "id": "http-gateway",
-      "name": "HTTP Gateway Honeypot",
-      "type": "http",
-      "template": "http",
-      "enabled": true,
-      "source_dir": "http-gateway",
-      "log_paths": ["logs/access.jsonl"],
-      "files": [
-        {
-          "path": "Dockerfile",
-          "content": "FROM nginx:1.27-alpine\nCOPY nginx.conf /etc/nginx/nginx.conf\nCOPY site /usr/share/nginx/html\n"
-        },
-        {
-          "path": "docker-compose.yml",
-          "content": "services:\n  honeypot:\n    build: .\n    restart: unless-stopped\n"
-        }
-      ]
-    }
-  ]
-}
-```
-
-Key fields:
-
-| Field | Meaning |
-|-------|---------|
-| `id` | Unique deployment identifier on this node. |
-| `type` / `template` | Protocol hint used by the proxy layer and template UI. |
-| `source_dir` | Subfolder name created under the runtime tree. |
-| `log_paths` | Files (relative to the package folder) that the agent should tail. |
-| `files[]` | Each entry has `path` (relative) and `content` (raw text). |
-
-Paths starting with `logs/` and `data/` are resolved into the deployment's isolated log and data folders (see [Logging Pipeline](#logging-pipeline)).
-
-## Deployment Lifecycle
-
-1. Operator edits a package in the dashboard. The server persists it in the agent's `config_json`.
-2. On its next sync, the client downloads the config and seeds files at:
-   ```
-   client/runtime/<node-id>/<deployment-id>/package/<source_dir>/
-   ```
-3. The client also creates dedicated runtime folders:
-   ```
-   client/runtime/<node-id>/<deployment-id>/data/
-   client/runtime/<node-id>/<deployment-id>/logs/
-   ```
-4. The client launches the package:
-   - If `docker-compose.yml` exists → `docker compose up -d --build` (preferred).
-   - Else if only `Dockerfile` exists → fallback to `docker build` + `docker run`.
-   - A compose override is generated to ensure unique container names so reused packages do not collide.
-5. The client tails each `log_paths` file and uploads new lines to the server.
-6. **After the first deploy, the client-local package is authoritative** — local edits under `client/runtime/.../package/` are preserved, and subsequent server changes do **not** overwrite local files. Edit on the client if you want client-side persistence.
-7. On `SIGINT`, `SIGTERM`, or normal exit, the agent stops every honeypot container it started.
-
-The agent only re-uploads the full package config when it actually changes; routine heartbeats stay tiny so large packages don't make the agent appear offline.
-
-## Proxy Layer
-
-`client/proxy/` implements protocol-aware TCP proxies that sit between attackers and honeypot containers. `ProxyManager` selects a proxy class by protocol or port:
-
-| Proxy | Default ports |
-|-------|---------------|
-| `ModbusProxy` | 502, 5020 |
-| `HTTPProxy` | 80, 8080, 443 |
-| `MQTTProxy` | 1883, 8883 |
-| `TCPProxy` | generic fallback |
-
-Proxies parse protocol frames, log structured events through `UnifiedLogger`, and forward traffic to the real container — giving you protocol-level visibility on top of raw connection logs.
-
-## Logging Pipeline
-
-```
-honeypot container
-        │ writes
-        ▼
-client/runtime/<node>/<deployment>/logs|data/...
-        │ tail
-        ▼
-client/client_logs.db  ──upload──▶  server.db
-                                       │
-                                       ▼
-                                  server/logs/*.jsonl
-                                       │
-                                       ▼
-                                Filebeat → Elasticsearch → Kibana
-```
-
-- Relative `log_paths` beginning with `logs/` resolve into the deployment's log folder; those beginning with `data/` resolve into its data folder.
-- `docker-compose.yml` can mount `${HONEYPOT_DATA_DIR}` and `${HONEYPOT_LOGS_DIR}` into containers to keep each honeypot's state isolated.
-- The server writes JSON copies of every uploaded log under `server/logs/` so Filebeat can pick them up without touching the database.
-
-## Project Structure
-
-```
+```text
 ICS-Honeypot/
-├── client/
-│   ├── main.py               # entry point
-│   ├── agent.py              # NodeAgent: server sync, orchestration, log upload
-│   ├── docker_manager.py     # writes package files, drives docker compose
-│   ├── log_collector.py      # tails log files into the local SQLite buffer
-│   ├── proxy/                # protocol-aware proxies (modbus / http / mqtt / tcp)
-│   ├── client_config.json    # local node config (node_id, server_url)
-│   └── runtime/              # per-deployment package, data, and logs (gitignored)
-├── server/
-│   ├── main.py               # FastAPI app + dashboard
-│   ├── database.py           # async SQLite layer (agents, logs)
-│   ├── auth_config.py        # admin credentials, API key, session secret
-│   ├── package_generators.py # built-in package templates (modbus / http / mqtt)
-│   ├── static/, templates/   # dashboard frontend
-│   ├── uploads/              # zip-uploaded package library
-│   ├── elk/                  # Filebeat / Elasticsearch / Kibana compose files
-│   └── logs/                 # JSON logs for Filebeat
-├── assets/                   # diagrams
+├── assets/                  # Logo 與架構圖
+├── client/                  # Honeypot Agent
+│   ├── main.py              # Agent 入口
+│   ├── agent.py             # 與 Server 同步、部署與日誌回傳
+│   ├── docker_manager.py    # Docker / Docker Compose 部署管理
+│   ├── log_collector.py     # 日誌收集
+│   └── proxy/               # MQTT / HTTP / TCP / Modbus Proxy
+├── server/                  # 中央 Server
+│   ├── main.py              # FastAPI app 與 Dashboard
+│   ├── database.py          # SQLite fallback
+│   ├── postgres_database.py # PostgreSQL 資料庫操作
+│   ├── package_generators.py
+│   ├── static/
+│   ├── templates/
+│   └── elk/                 # PostgreSQL / ELK / ElastAlert docker-compose
+├── tools/                   # 測試工具
 ├── requirements.txt
 └── README.md
 ```
-
-Both `server/server.db` and `client/client_logs.db` are gitignored.
-
-## Operational Notes
-
-- The dashboard edits **raw package files**, not fixed protocol-specific forms — every package is just a folder of files you control.
-- The client never auto-creates a `docker-compose.yml`. Include one in the package if you want compose mode.
-- If a package has both `docker-compose.yml` and `Dockerfile`, compose wins.
-- Uploaded zip archives are stored in the server-side **package library** so other agents can browse and reuse them.
-- There is no test suite, type checker, or linter wired up. Changes are validated by running the agent + server end-to-end.
 
 ## License
 

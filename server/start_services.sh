@@ -441,11 +441,33 @@ SERVER_PUBLIC_URL=
 
 # Kibana URL (leave empty to auto-detect)
 KIBANA_URL=
+
+# PostgreSQL database used by the FastAPI server.
+# The docker compose stack binds PostgreSQL to 127.0.0.1 only.
+POSTGRES_DB=honeypot
+POSTGRES_USER=honeypot
+POSTGRES_PASSWORD=honeypot_change_me
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql://honeypot:honeypot_change_me@127.0.0.1:5432/honeypot
 EOF
         ok "Created server/.env (API_KEY auto-generated)"
         warn "⚠️  Change ADMIN_PASSWORD before deploying to production!"
     else
         ok "server/.env already exists."
+        if ! grep -qE "^DATABASE_URL=" "$SCRIPT_DIR/.env"; then
+            cat >> "$SCRIPT_DIR/.env" <<'EOF'
+
+# PostgreSQL database used by the FastAPI server.
+# The docker compose stack binds PostgreSQL to 127.0.0.1 only.
+POSTGRES_DB=honeypot
+POSTGRES_USER=honeypot
+POSTGRES_PASSWORD=honeypot_change_me
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql://honeypot:honeypot_change_me@127.0.0.1:5432/honeypot
+EOF
+            ok "Added PostgreSQL defaults to server/.env."
+            warn "Change POSTGRES_PASSWORD before production deployment."
+        fi
     fi
 
     # Client .env
@@ -513,6 +535,18 @@ fi
 mkdir -p "$SCRIPT_DIR/logs"
 mkdir -p "$REPO_ROOT/client/runtime"
 
+# Filebeat runs in Docker and older log files may have been created as root.
+# The FastAPI server must be able to append JSON logs, otherwise Filebeat and
+# ElastAlert stop seeing new events even though PostgreSQL keeps receiving them.
+if [ -d "$SCRIPT_DIR/logs" ]; then
+    if find "$SCRIPT_DIR/logs" -maxdepth 1 -type f ! -writable | grep -q .; then
+        if command -v sudo &> /dev/null; then
+            sudo chown -R "$(id -u):$(id -g)" "$SCRIPT_DIR/logs" || true
+        fi
+    fi
+    chmod -R u+rwX,g+rX "$SCRIPT_DIR/logs" 2>/dev/null || true
+fi
+
 # Keep the daemon log from growing forever. Uvicorn access logs are disabled
 # in main.py, but existing deployments may already have large files.
 if [ -f "$LOG_FILE" ]; then
@@ -545,17 +579,19 @@ else
     COMPOSE_CMD="docker-compose"
 fi
 
-# ElastAlert reads ${API_KEY} from the same .env the FastAPI server uses;
-# point compose at server/.env so the variable is substituted into the
-# elastalert container's environment block.
-COMPOSE_ENV_ARGS=""
+# Compose variable substitution reads exported shell variables. Load
+# server/.env here so the same values feed PostgreSQL and ElastAlert even on
+# older Compose builds that do not support --env-file.
 if [ -f "$SCRIPT_DIR/.env" ]; then
-    COMPOSE_ENV_ARGS="--env-file $SCRIPT_DIR/.env"
+    set -a
+    # shellcheck disable=SC1090
+    . "$SCRIPT_DIR/.env"
+    set +a
 else
     warn "$SCRIPT_DIR/.env not found — ElastAlert webhook may post without an API key."
 fi
 
-$COMPOSE_CMD $COMPOSE_ENV_ARGS up -d --force-recreate
+$COMPOSE_CMD up -d --force-recreate
 
 if [ $? -ne 0 ]; then
     fail "Failed to start ELK stack. Ensure Docker is running."
@@ -595,9 +631,11 @@ if [ "$DAEMON_MODE" = true ]; then
     echo -e "  Stop:      ${CYAN}$0 stop${NC}"
     echo -e "${GREEN}==========================================${NC}"
     echo ""
-    nohup "$PYTHON_BIN" main.py >> "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
-    ok "Server started in background (PID $!)"
+    setsid -f "$PYTHON_BIN" main.py >> "$LOG_FILE" 2>&1 < /dev/null
+    sleep 1
+    NEW_PID=$(pgrep -f "$PYTHON_BIN main.py" | tail -1)
+    echo "$NEW_PID" > "$PID_FILE"
+    ok "Server started in background (PID $NEW_PID)"
     ok "View logs: $0 logs"
 else
     echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop"

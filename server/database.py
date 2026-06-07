@@ -5,10 +5,12 @@ import json
 from datetime import datetime
 import os
 import asyncio
+import time
 
 class ServerDB:
     def __init__(self, db_path="server.db"):
         self.db_path = db_path
+        self._write_lock = asyncio.Lock()
         try:
             self.agent_offline_after_seconds = int(os.environ.get("AGENT_OFFLINE_AFTER_SECONDS", "300"))
         except ValueError:
@@ -123,34 +125,36 @@ class ServerDB:
                 UNIQUE(log_id, signature_id, source)
             )
         ''')
-        # Index creation is best-effort — a busy DB lock shouldn't prevent
-        # the server from booting; queries still work without the indexes.
-        for idx_sql in (
-            'CREATE INDEX IF NOT EXISTS idx_alerts_ip ON alerts(attacker_ip)',
-            'CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp)',
-            'CREATE INDEX IF NOT EXISTS idx_alerts_ip_id ON alerts(attacker_ip, id DESC)',
-            'CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(attacker_ip)',
-            'CREATE INDEX IF NOT EXISTS idx_logs_ts_ip ON logs(timestamp, attacker_ip)',
-        ):
-            try:
-                cursor.execute(idx_sql)
-            except sqlite3.OperationalError as e:
-                print(f"[db] index create skipped: {e}")
+        # Index builds and historical cleanup can take a long time on a
+        # production DB. Keep startup predictable by making those maintenance
+        # tasks explicit instead of running them on every server boot.
+        if os.environ.get("DB_MAINTENANCE_ON_STARTUP", "").lower() in ("1", "true", "yes"):
+            for idx_sql in (
+                'CREATE INDEX IF NOT EXISTS idx_alerts_ip ON alerts(attacker_ip)',
+                'CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp)',
+                'CREATE INDEX IF NOT EXISTS idx_alerts_ip_id ON alerts(attacker_ip, id DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(attacker_ip)',
+                'CREATE INDEX IF NOT EXISTS idx_logs_ts_ip ON logs(timestamp, attacker_ip)',
+            ):
+                try:
+                    cursor.execute(idx_sql)
+                except sqlite3.OperationalError as e:
+                    print(f"[db] index create skipped: {e}")
 
-        # One-time cleanup: the legacy Suricata-style internal analyzer used
-        # to bulk-insert sentinel rows (`internal-scanned`) plus its own
-        # `internal` / `suricata-external` alerts. We've removed it in favor
-        # of ElastAlert, so drop those rows. Idempotent — once they're gone
-        # this DELETE matches zero rows.
-        try:
-            cursor.execute(
-                "DELETE FROM alerts WHERE source IN "
-                "('internal', 'internal-scanned', 'suricata-external')"
-            )
-            if cursor.rowcount:
-                print(f"[db] removed {cursor.rowcount:,} legacy analyzer alert rows")
-        except sqlite3.OperationalError as e:
-            print(f"[db] legacy alert cleanup skipped: {e}")
+            # One-time cleanup: the legacy Suricata-style internal analyzer used
+            # to bulk-insert sentinel rows (`internal-scanned`) plus its own
+            # `internal` / `suricata-external` alerts. We've removed it in favor
+            # of ElastAlert, so drop those rows. Idempotent — once they're gone
+            # this DELETE matches zero rows.
+            try:
+                cursor.execute(
+                    "DELETE FROM alerts WHERE source IN "
+                    "('internal', 'internal-scanned', 'suricata-external')"
+                )
+                if cursor.rowcount:
+                    print(f"[db] removed {cursor.rowcount:,} legacy analyzer alert rows")
+            except sqlite3.OperationalError as e:
+                print(f"[db] legacy alert cleanup skipped: {e}")
 
         conn.commit()
         conn.close()
@@ -183,35 +187,39 @@ class ServerDB:
         config_str = json.dumps(config)
         runtime_status_str = json.dumps(runtime_status or {})
         
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            # Check if agent exists to preserve is_active/runtime status/whitelist
-            async with db.execute('SELECT is_active, runtime_status_json, whitelist_json FROM agents WHERE node_id = ?', (node_id,)) as cursor:
-                row = await cursor.fetchone()
-                is_active = row[0] if row else 0 # Default to 0 (Inactive) if new agent
-                if row and row[1] and not runtime_status:
-                    runtime_status_str = row[1]
-                # Preserve existing whitelist — INSERT OR REPLACE would wipe it
-                # because SQLite REPLACE = DELETE + INSERT.
-                whitelist_json = row[2] if row else None
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                # Check if agent exists to preserve is_active/runtime status/whitelist
+                async with db.execute('SELECT is_active, runtime_status_json, whitelist_json FROM agents WHERE node_id = ?', (node_id,)) as cursor:
+                    row = await cursor.fetchone()
+                    is_active = row[0] if row else 0 # Default to 0 (Inactive) if new agent
+                    if row and row[1] and not runtime_status:
+                        runtime_status_str = row[1]
+                    # Preserve existing whitelist — INSERT OR REPLACE would wipe it
+                    # because SQLite REPLACE = DELETE + INSERT.
+                    whitelist_json = row[2] if row else None
 
-            await db.execute('''
-                INSERT OR REPLACE INTO agents (node_id, name, ip, last_heartbeat, status, config_json, is_active, runtime_status_json, whitelist_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (node_id, name, ip, now, "Online", config_str, is_active, runtime_status_str, whitelist_json))
-            
-            await db.commit()
+                await db.execute('''
+                    INSERT OR REPLACE INTO agents (node_id, name, ip, last_heartbeat, status, config_json, is_active, runtime_status_json, whitelist_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (node_id, name, ip, now, "Online", config_str, is_active, runtime_status_str, whitelist_json))
+                
+                await db.commit()
         return config
 
     async def update_heartbeat(self, node_id, ip=None, name=None, runtime_status=None):
         now = datetime.now().isoformat()
         runtime_status_str = json.dumps(runtime_status or {})
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            cursor = await db.execute(
-                'UPDATE agents SET last_heartbeat = ?, status = ?, ip = COALESCE(?, ip), name = COALESCE(?, name), runtime_status_json = ? WHERE node_id = ?', 
-                (now, "Online", ip, name, runtime_status_str, node_id)
-            )
-            changes = cursor.rowcount
-            await db.commit()
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                cursor = await db.execute(
+                    'UPDATE agents SET last_heartbeat = ?, status = ?, ip = COALESCE(?, ip), name = COALESCE(?, name), runtime_status_json = ? WHERE node_id = ?', 
+                    (now, "Online", ip, name, runtime_status_str, node_id)
+                )
+                changes = cursor.rowcount
+                await db.commit()
         return changes > 0
 
     async def get_agent(self, node_id):
@@ -249,48 +257,56 @@ class ServerDB:
         
     async def update_agent_config(self, node_id, config_dict, name=None):
         config_str = json.dumps(config_dict)
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            if name:
-                await db.execute('UPDATE agents SET config_json = ?, name = ? WHERE node_id = ?', (config_str, name, node_id))
-            else:
-                await db.execute('UPDATE agents SET config_json = ? WHERE node_id = ?', (config_str, node_id))
-            await db.commit()
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                if name:
+                    await db.execute('UPDATE agents SET config_json = ?, name = ? WHERE node_id = ?', (config_str, name, node_id))
+                else:
+                    await db.execute('UPDATE agents SET config_json = ? WHERE node_id = ?', (config_str, node_id))
+                await db.commit()
 
     async def rename_agent(self, old_node_id, new_node_id):
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            try:
-                # Check if new ID exists
-                async with db.execute('SELECT 1 FROM agents WHERE node_id = ?', (new_node_id,)) as cursor:
-                    if await cursor.fetchone():
-                        return False, "New Node ID already exists"
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                try:
+                    # Check if new ID exists
+                    async with db.execute('SELECT 1 FROM agents WHERE node_id = ?', (new_node_id,)) as cursor:
+                        if await cursor.fetchone():
+                            return False, "New Node ID already exists"
 
-                # Update agents table (whitelist_json stays with the row)
-                await db.execute('UPDATE agents SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
-                
-                # Update logs table
-                await db.execute('UPDATE logs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+                    # Update agents table (whitelist_json stays with the row)
+                    await db.execute('UPDATE agents SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+                    
+                    # Update logs table
+                    await db.execute('UPDATE logs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
 
-                # Update whitelist_logs table
-                await db.execute('UPDATE whitelist_logs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
-                
-                await db.commit()
-                return True, "Renamed successfully"
-            except Exception as e:
-                await db.rollback()
-                return False, str(e)
+                    # Update whitelist_logs table
+                    await db.execute('UPDATE whitelist_logs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+                    
+                    await db.commit()
+                    return True, "Renamed successfully"
+                except Exception as e:
+                    await db.rollback()
+                    return False, str(e)
 
     async def delete_agent(self, node_id):
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            await db.execute('DELETE FROM logs WHERE node_id = ?', (node_id,))
-            await db.execute('DELETE FROM whitelist_logs WHERE node_id = ?', (node_id,))
-            await db.execute('DELETE FROM agents WHERE node_id = ?', (node_id,))
-            await db.commit()
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                await db.execute('DELETE FROM logs WHERE node_id = ?', (node_id,))
+                await db.execute('DELETE FROM whitelist_logs WHERE node_id = ?', (node_id,))
+                await db.execute('DELETE FROM agents WHERE node_id = ?', (node_id,))
+                await db.commit()
 
     async def toggle_agent_active(self, node_id, is_active):
         val = 1 if is_active else 0
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            await db.execute('UPDATE agents SET is_active = ? WHERE node_id = ?', (val, node_id))
-            await db.commit()
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                await db.execute('UPDATE agents SET is_active = ? WHERE node_id = ?', (val, node_id))
+                await db.commit()
 
     # --- Per-Agent Whitelist ---
 
@@ -307,9 +323,11 @@ class ServerDB:
 
     async def update_agent_whitelist(self, node_id, whitelist_dict):
         whitelist_str = json.dumps(whitelist_dict, ensure_ascii=False)
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            await db.execute('UPDATE agents SET whitelist_json = ? WHERE node_id = ?', (whitelist_str, node_id))
-            await db.commit()
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                await db.execute('UPDATE agents SET whitelist_json = ? WHERE node_id = ?', (whitelist_str, node_id))
+                await db.commit()
 
     # --- Log Management ---
 
@@ -406,52 +424,59 @@ class ServerDB:
         return elk
 
     async def insert_logs(self, node_id, logs):
-        count = 0
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            for log in logs:
-                # log dict structure from client: {timestamp, attacker_ip, protocol, request_data, response_data, metadata}
-                timestamp = log.get('timestamp') or datetime.now().isoformat()
-                attacker_ip = log.get('attacker_ip')
-                protocol = log.get('protocol')
-                req = log.get('request_data')
-                resp = log.get('response_data')
-                meta = log.get('metadata')
+        rows = []
+        for log in logs:
+            # log dict structure from client: {timestamp, attacker_ip, protocol, request_data, response_data, metadata}
+            timestamp = log.get('timestamp') or datetime.now().isoformat()
+            attacker_ip = log.get('attacker_ip')
+            protocol = log.get('protocol')
+            req = log.get('request_data')
+            resp = log.get('response_data')
+            meta = log.get('metadata')
 
-                # Parse metadata
-                meta_dict = self._parse_metadata(meta)
+            meta_dict = self._parse_metadata(meta)
+            elk_entry = self._build_elk_entry(
+                node_id, timestamp, attacker_ip, protocol, req, resp, meta_dict
+            )
+            await self._log_to_json_file(elk_entry)
 
-                # Build flat ELK-friendly JSON entry
-                elk_entry = self._build_elk_entry(
-                    node_id, timestamp, attacker_ip, protocol, req, resp, meta_dict
-                )
-                await self._log_to_json_file(elk_entry)
+            meta_str = json.dumps(meta_dict, ensure_ascii=False) if isinstance(meta_dict, dict) else str(meta_dict)
+            if isinstance(req, (dict, list)): req = json.dumps(req)
+            if isinstance(resp, (dict, list)): resp = json.dumps(resp)
+            rows.append((timestamp, node_id, protocol, attacker_ip, req, resp, meta_str))
 
-                # Store in SQLite (keep metadata as JSON string for frontend)
-                meta_str = json.dumps(meta_dict, ensure_ascii=False) if isinstance(meta_dict, dict) else str(meta_dict)
-                if isinstance(req, (dict, list)): req = json.dumps(req)
-                if isinstance(resp, (dict, list)): resp = json.dumps(resp)
+        if not rows:
+            return 0
 
-                await db.execute('''
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                await db.executemany('''
                     INSERT INTO logs (timestamp, node_id, protocol, attacker_ip, request_data, response_data, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (timestamp, node_id, protocol, attacker_ip, req, resp, meta_str))
-                count += 1
+                ''', rows)
 
-            await db.commit()
-        return count
+                await db.commit()
+        return len(rows)
 
     async def get_recent_logs(self, limit=100):
         async with aiosqlite.connect(self.db_path, timeout=20) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute('SELECT * FROM logs ORDER BY id DESC LIMIT ?', (limit,)) as cursor:
+            if limit is None:
+                cursor_ctx = db.execute('SELECT * FROM logs ORDER BY id DESC')
+            else:
+                cursor_ctx = db.execute('SELECT * FROM logs ORDER BY id DESC LIMIT ?', (limit,))
+            async with cursor_ctx as cursor:
                 rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
     async def delete_agent_logs(self, node_id):
         """Delete all logs for a specific agent"""
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            await db.execute('DELETE FROM logs WHERE node_id = ?', (node_id,))
-            await db.commit()
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                await db.execute('DELETE FROM logs WHERE node_id = ?', (node_id,))
+                await db.commit()
 
     # ---------- Whitelist log methods ----------
 
@@ -462,29 +487,34 @@ class ServerDB:
         intentionally does NOT call _log_to_json_file() — whitelist entries
         must not appear in the ELK ingest stream.
         """
-        count = 0
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            for log in logs:
-                timestamp = log.get('timestamp') or datetime.now().isoformat()
-                attacker_ip = log.get('attacker_ip')
-                protocol = log.get('protocol')
-                req = log.get('request_data')
-                resp = log.get('response_data')
-                meta = log.get('metadata')
+        rows = []
+        for log in logs:
+            timestamp = log.get('timestamp') or datetime.now().isoformat()
+            attacker_ip = log.get('attacker_ip')
+            protocol = log.get('protocol')
+            req = log.get('request_data')
+            resp = log.get('response_data')
+            meta = log.get('metadata')
 
-                meta_dict = self._parse_metadata(meta)
-                meta_str = json.dumps(meta_dict, ensure_ascii=False) if isinstance(meta_dict, dict) else str(meta_dict)
-                if isinstance(req, (dict, list)): req = json.dumps(req)
-                if isinstance(resp, (dict, list)): resp = json.dumps(resp)
+            meta_dict = self._parse_metadata(meta)
+            meta_str = json.dumps(meta_dict, ensure_ascii=False) if isinstance(meta_dict, dict) else str(meta_dict)
+            if isinstance(req, (dict, list)): req = json.dumps(req)
+            if isinstance(resp, (dict, list)): resp = json.dumps(resp)
+            rows.append((timestamp, node_id, protocol, attacker_ip, req, resp, meta_str))
 
-                await db.execute('''
+        if not rows:
+            return 0
+
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                await db.executemany('''
                     INSERT INTO whitelist_logs (timestamp, node_id, protocol, attacker_ip, request_data, response_data, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (timestamp, node_id, protocol, attacker_ip, req, resp, meta_str))
-                count += 1
+                ''', rows)
 
-            await db.commit()
-        return count
+                await db.commit()
+        return len(rows)
 
     async def get_recent_whitelist_logs(self, limit=100, node_id=None):
         async with aiosqlite.connect(self.db_path, timeout=20) as db:
@@ -501,13 +531,15 @@ class ServerDB:
 
     async def delete_agent_whitelist_logs(self, node_id):
         """Delete all whitelist logs for a specific agent"""
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            await db.execute('DELETE FROM whitelist_logs WHERE node_id = ?', (node_id,))
-            await db.commit()
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                await db.execute('DELETE FROM whitelist_logs WHERE node_id = ?', (node_id,))
+                await db.commit()
 
     # ---------- IP analysis (used by attack-map analysis panel) ----------
 
-    async def get_ip_summary(self, limit=200, since=None, until=None):
+    async def get_ip_summary(self, limit=200, since=None, until=None, offset=0, ip_search=None):
         """Return per-attacker-IP rollups joined with alert stats.
 
         Each row: ip, total_packets, protocols (csv), node_ids (csv),
@@ -552,6 +584,12 @@ class ServerDB:
         main_where.append("l.attacker_ip != ''")
         where = ("WHERE " + " AND ".join(main_where)) if main_where else ""
 
+        alert_scan_limit = int(os.environ.get("IP_ANALYSIS_ALERT_SCAN_ROWS", "10000"))
+        alert_scan_limit = max(min(alert_scan_limit, 250000), 1000)
+        alert_where.append("a.id >= COALESCE((SELECT MAX(id) FROM alerts), 0) - ?")
+        alert_params.append(alert_scan_limit)
+        alert_where.append("a.attacker_ip IS NOT NULL")
+        alert_where.append("a.attacker_ip != ''")
         alert_summary_where = ("WHERE " + " AND ".join(alert_where)) if alert_where else ""
 
         sql = f'''
@@ -598,9 +636,17 @@ class ServerDB:
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA busy_timeout=2000")
+            deadline = time.monotonic() + float(
+                os.environ.get("IP_ANALYSIS_QUERY_TIMEOUT_SECONDS", "5")
+            )
+            conn.set_progress_handler(
+                lambda: 1 if time.monotonic() > deadline else 0,
+                1000,
+            )
             cursor = conn.execute(sql, params)
             return [dict(r) for r in cursor.fetchall()]
         finally:
+            conn.set_progress_handler(None, 0)
             conn.close()
 
     async def get_logs_by_ip(self, ip, limit=200):
@@ -617,37 +663,39 @@ class ServerDB:
 
     async def insert_alert(self, alert: dict) -> bool:
         """Insert one alert. Returns True if newly inserted, False if duplicate."""
-        async with aiosqlite.connect(self.db_path, timeout=20) as db:
-            try:
-                await db.execute(
-                    '''INSERT OR IGNORE INTO alerts
-                       (timestamp, attacker_ip, node_id, protocol, signature, signature_id,
-                        category, severity, src_ip, src_port, dst_ip, dst_port, log_id, source, metadata)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                    (
-                        alert.get("timestamp") or datetime.now().isoformat(),
-                        alert.get("attacker_ip"),
-                        alert.get("node_id"),
-                        alert.get("protocol"),
-                        alert.get("signature"),
-                        alert.get("signature_id"),
-                        alert.get("category"),
-                        alert.get("severity") or 3,
-                        alert.get("src_ip"),
-                        alert.get("src_port") or 0,
-                        alert.get("dst_ip"),
-                        alert.get("dst_port") or 0,
-                        alert.get("log_id"),
-                        alert.get("source") or "internal",
-                        json.dumps(alert.get("metadata") or {}, ensure_ascii=False),
-                    ),
-                )
-                changes = db.total_changes
-                await db.commit()
-                return changes > 0
-            except Exception as e:
-                print(f"insert_alert error: {e}")
-                return False
+        async with self._write_lock:
+            async with aiosqlite.connect(self.db_path, timeout=30) as db:
+                await db.execute('PRAGMA busy_timeout=30000')
+                try:
+                    await db.execute(
+                        '''INSERT OR IGNORE INTO alerts
+                           (timestamp, attacker_ip, node_id, protocol, signature, signature_id,
+                            category, severity, src_ip, src_port, dst_ip, dst_port, log_id, source, metadata)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (
+                            alert.get("timestamp") or datetime.now().isoformat(),
+                            alert.get("attacker_ip"),
+                            alert.get("node_id"),
+                            alert.get("protocol"),
+                            alert.get("signature"),
+                            alert.get("signature_id"),
+                            alert.get("category"),
+                            alert.get("severity") or 3,
+                            alert.get("src_ip"),
+                            alert.get("src_port") or 0,
+                            alert.get("dst_ip"),
+                            alert.get("dst_port") or 0,
+                            alert.get("log_id"),
+                            alert.get("source") or "internal",
+                            json.dumps(alert.get("metadata") or {}, ensure_ascii=False),
+                        ),
+                    )
+                    changes = db.total_changes
+                    await db.commit()
+                    return changes > 0
+                except Exception as e:
+                    print(f"insert_alert error: {e}")
+                    return False
 
     async def get_alerts(self, limit=200, ip=None):
         async with aiosqlite.connect(self.db_path, timeout=20) as db:

@@ -164,12 +164,13 @@ async function loadStats() {
     const countElem = document.getElementById("active-agents-count");
     if (countElem) countElem.textContent = agents.filter((agent) => agent.status === "Online").length;
     
-    const logsReq = fetch(`${API_BASE}/recent_logs`).then(r => r.json()).catch(() => []);
-    logsReq.then(logs => {
+    const statsReq = fetch(`${API_BASE}/dashboard_stats`).then(r => r.json()).catch(() => null);
+    statsReq.then(stats => {
+        if (!stats) return;
         const totalElem = document.getElementById("total-logs-count");
-        if (totalElem) totalElem.textContent = logs.length;
+        if (totalElem) totalElem.textContent = stats.total_logs;
         const alertsElem = document.getElementById("alerts-count");
-        if (alertsElem) alertsElem.textContent = logs.filter((log) => log.protocol === "modbus").length;
+        if (alertsElem) alertsElem.textContent = stats.total_alerts;
     });
 }
 

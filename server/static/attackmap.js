@@ -555,7 +555,7 @@ class AttackMap {
 
     async _pollLogs() {
         try {
-            const logs = await fetch("/api/recent_logs").then(r => r.json());
+            const logs = await fetch("/api/recent_logs?limit=200").then(r => r.json());
             for (const log of logs) {
                 const logId = log.id;
                 if (this.seenLogIds.has(logId)) continue;
