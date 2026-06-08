@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import aiofiles
 
@@ -535,7 +535,7 @@ class PostgresServerDB:
         pool = await self._ensure_pool()
         if limit is None:
             limit = 500
-        rows = await pool.fetch("SELECT * FROM logs ORDER BY timestamp DESC, id DESC LIMIT $1", limit)
+        rows = await pool.fetch("SELECT * FROM logs ORDER BY id DESC LIMIT $1", limit)
         return [dict(row) for row in rows]
 
     async def get_dashboard_stats(self):
@@ -619,6 +619,17 @@ class PostgresServerDB:
             params.append(value)
             return f"${len(params)}"
 
+        def is_long_rolling_window(value: str) -> bool:
+            if not value or until:
+                return False
+            try:
+                dt = datetime.fromisoformat(str(value))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt <= datetime.now(timezone.utc) - timedelta(hours=24)
+            except Exception:
+                return False
+
         if not since and not until:
             summary_where = ["s.total_packets > 0"]
             if ip_search:
@@ -654,6 +665,45 @@ class PostgresServerDB:
             )
             result = [dict(row) for row in rows]
             return {"rows": result, "total": total}
+
+        # Long rolling windows such as "Last 7 days" can touch millions of
+        # raw log rows. Use the maintained rollup table for these dashboard
+        # views so the panel remains responsive under load. Packet counts are
+        # lifetime totals for IPs active in the selected window.
+        if is_long_rolling_window(since):
+            summary_where = ["s.total_packets > 0", f"s.last_seen >= {add(since)}"]
+            if ip_search:
+                summary_where.append(f"s.ip ILIKE {add('%' + ip_search + '%')}")
+            if exclude_ips:
+                summary_where.append(f"s.ip <> ALL({add(exclude_ips)}::text[])")
+            summary_where_sql = " AND ".join(summary_where)
+            count_params = list(params)
+            total = await pool.fetchval(
+                f"SELECT COUNT(*) FROM ip_summaries s WHERE {summary_where_sql}",
+                *count_params,
+            )
+            limit_placeholder = add(limit)
+            offset_placeholder = add(offset)
+            rows = await pool.fetch(
+                f"""
+                SELECT
+                    s.ip,
+                    s.total_packets,
+                    array_to_string(s.protocols, ',') AS protocols,
+                    array_to_string(s.node_ids, ',') AS node_ids,
+                    s.first_seen,
+                    s.last_seen,
+                    s.alert_count,
+                    s.max_severity
+                FROM ip_summaries s
+                WHERE {summary_where_sql}
+                ORDER BY s.last_seen DESC NULLS LAST, s.ip
+                LIMIT {limit_placeholder}
+                OFFSET {offset_placeholder}
+                """,
+                *params,
+            )
+            return {"rows": [dict(row) for row in rows], "total": total}
 
         log_where = []
         alert_where = []
@@ -712,6 +762,7 @@ class PostgresServerDB:
                     COUNT(*) AS alert_count,
                     MIN(a.severity) AS max_severity
                 FROM alerts a
+                JOIN page_ips p ON p.ip = a.attacker_ip
                 WHERE {alert_where_sql}
                 GROUP BY a.attacker_ip
             )

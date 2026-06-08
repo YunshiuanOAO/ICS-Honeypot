@@ -539,7 +539,7 @@ class ServerDB:
 
     # ---------- IP analysis (used by attack-map analysis panel) ----------
 
-    async def get_ip_summary(self, limit=200, since=None, until=None, offset=0, ip_search=None):
+    async def get_ip_summary(self, limit=200, since=None, until=None, offset=0, ip_search=None, exclude_ips=None):
         """Return per-attacker-IP rollups joined with alert stats.
 
         Each row: ip, total_packets, protocols (csv), node_ids (csv),
@@ -558,6 +558,15 @@ class ServerDB:
         if until:
             where_clauses.append("l.timestamp <= ?")
             params.append(until)
+        if ip_search:
+            where_clauses.append("l.attacker_ip LIKE ?")
+            params.append(f"%{ip_search}%")
+        exclude_ips = [ip for ip in (exclude_ips or []) if ip]
+        if exclude_ips:
+            where_clauses.append(
+                "l.attacker_ip NOT IN (" + ",".join("?" for _ in exclude_ips) + ")"
+            )
+            params.extend(exclude_ips)
         where = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
         # Alert sub-queries need their own window predicates because they
@@ -570,6 +579,14 @@ class ServerDB:
         if until:
             alert_where.append("a.timestamp <= ?")
             alert_params.append(until)
+        if ip_search:
+            alert_where.append("a.attacker_ip LIKE ?")
+            alert_params.append(f"%{ip_search}%")
+        if exclude_ips:
+            alert_where.append(
+                "a.attacker_ip NOT IN (" + ",".join("?" for _ in exclude_ips) + ")"
+            )
+            alert_params.extend(exclude_ips)
         # The logs table can be multiple GB because metadata stores full
         # packet context. Keep this dashboard query bounded even when a time
         # window is selected; otherwise the default "Last 7 days" view can

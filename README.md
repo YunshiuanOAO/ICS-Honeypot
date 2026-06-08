@@ -21,6 +21,18 @@
   <img src="https://img.shields.io/badge/ElastAlert-Alerting-FF6F00?style=for-the-badge" alt="ElastAlert">
 </p>
 
+## Demo 影片
+
+<p align="center">
+  <a href="https://youtu.be/dVBAW2rm6SY">
+    <img src="https://img.youtube.com/vi/dVBAW2rm6SY/maxresdefault.jpg" alt="ICS Honeypot Demo Video" width="720">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://youtu.be/dVBAW2rm6SY">觀看 Demo 影片</a>
+</p>
+
 ## 簡介
 
 本專案是一套以 Python 建置的分散式 ICS Honeypot 系統，用於模擬工控設備、誘捕攻擊流量並進行集中分析。系統採用 Server 與 Honeypot Agent 分離式架構，Server 負責管理蜜罐節點、部署設定、攻擊日誌接收與儀表板展示；Agent 可部署在不同主機或網路環境中，透過 Docker 執行 MQTT、HTTP、TCP Socket、模擬 PLC 或自製 HMI 等服務。

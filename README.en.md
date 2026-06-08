@@ -21,6 +21,18 @@
   <img src="https://img.shields.io/badge/ElastAlert-Alerting-FF6F00?style=for-the-badge" alt="ElastAlert">
 </p>
 
+## Demo Video
+
+<p align="center">
+  <a href="https://youtu.be/dVBAW2rm6SY">
+    <img src="https://img.youtube.com/vi/dVBAW2rm6SY/maxresdefault.jpg" alt="ICS Honeypot Demo Video" width="720">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://youtu.be/dVBAW2rm6SY">Watch the Demo Video</a>
+</p>
+
 ## Overview
 
 This project is a distributed ICS Honeypot simulation system built with Python. It is designed to emulate industrial control devices, attract attack traffic, and centralize security analysis. The system uses a separated Server and Honeypot Agent architecture. The Server manages honeypot nodes, deployment configuration, attack log ingestion, and the web dashboard. Agents can run on different hosts or network environments and use Docker to deploy MQTT, HTTP, TCP Socket, simulated PLC, custom HMI, or other honeypot services.

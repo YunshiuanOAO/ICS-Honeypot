@@ -1,27 +1,29 @@
-# Oversized TCP/custom payload that looks like a buffer overflow probe.
-# Streetlight socket commands are normally tiny (roughly 10-30 bytes), so a
-# payload above this threshold is suspicious enough to raise a high alert.
-name: TCP Custom Buffer Overflow Probe
+# TCP/custom payload that strongly resembles a buffer overflow probe.
+#
+# Normal streetlight socket commands are tiny. This rule only fires on large
+# payloads or classic exploit filler patterns, so short commands such as "0a"
+# remain Medium payload events instead of High overflow alerts.
+name: TCP Custom Possible Buffer Overflow Probe
 type: any
 index: honeypot-*
 
 filter:
   - query:
       query_string:
-        query: '(protocol:custom OR (protocol:tcp AND (dst_port:15567 OR dst_port:15568)))'
+        query: '(protocol:custom OR protocol:tcp)'
   - bool:
       minimum_should_match: 1
       should:
         - range:
             request_size_bytes:
-              gte: 512
+              gte: 2048
         - wildcard:
             request_data: "*41414141414141414141414141414141*"
         - wildcard:
             request_data: "*90909090909090909090909090909090*"
 
 realert:
-  minutes: 10
+  seconds: 30
 query_key:
   - attacker_ip
   - protocol
@@ -48,4 +50,5 @@ http_post_payload:
   dst_ip: dst_ip
   dst_port: dst_port
   request_size_bytes: request_size_bytes
+  request_data: request_data
   log_message: log_message

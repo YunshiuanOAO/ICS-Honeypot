@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
+import asyncio
 import uvicorn
 import os
 import shutil
@@ -1002,7 +1003,10 @@ async def recent_logs(limit: str = "50"):
             parsed_limit = max(1, min(int(limit), 1000))
         except (TypeError, ValueError):
             parsed_limit = 50
-    logs = await db.get_recent_logs(limit=parsed_limit)
+    try:
+        logs = await db.get_recent_logs(limit=parsed_limit)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Recent logs query timed out; retry shortly")
     return logs
 
 
@@ -1080,6 +1084,8 @@ async def ip_analysis(
         if "interrupted" in detail.lower():
             raise HTTPException(status_code=503, detail="IP analysis query timed out; retry with a shorter time range")
         raise HTTPException(status_code=500, detail=f"IP analysis database error: {detail}")
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="IP analysis query timed out; retry with a shorter time range")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"IP analysis failed: {e}")
 

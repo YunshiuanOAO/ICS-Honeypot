@@ -9,11 +9,11 @@ rules_folder: /tmp/rules-rendered
 
 # How often the rule scheduler ticks
 run_every:
-  seconds: 30
+  seconds: 5
 
 # Look-back window applied to each rule's filter for "new" events
 buffer_time:
-  minutes: 5
+  minutes: 2
 
 # Elasticsearch connection
 es_host: elasticsearch
