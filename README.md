@@ -2,7 +2,7 @@
   <strong>繁體中文</strong> | <a href="./README.en.md">English</a>
 </p>
 
-# ICS Honeypot 路燈模擬系統
+# 分散式 ICS Honeypot 系統
 
 <p align="center">
   <img src="./assets/distributed-honeypot-logo-white.png" alt="Distributed ICS Honeypot Logo" width="260">
@@ -23,7 +23,7 @@
 
 ## 簡介
 
-本專案是一套以 Python 建置的分散式 ICS Honeypot 路燈模擬系統，用於模擬工控設備、誘捕攻擊流量並進行集中分析。系統採用 Server 與 Honeypot Agent 分離式架構，Server 負責管理蜜罐節點、部署設定、攻擊日誌接收與儀表板展示；Agent 可部署在不同主機或網路環境中，透過 Docker 執行 MQTT、HTTP、TCP Socket、模擬 PLC 或自製 HMI 等服務。
+本專案是一套以 Python 建置的分散式 ICS Honeypot 系統，用於模擬工控設備、誘捕攻擊流量並進行集中分析。系統採用 Server 與 Honeypot Agent 分離式架構，Server 負責管理蜜罐節點、部署設定、攻擊日誌接收與儀表板展示；Agent 可部署在不同主機或網路環境中，透過 Docker 執行 MQTT、HTTP、TCP Socket、模擬 PLC 或自製 HMI 等服務。
 
 蜜罐服務前方會透過 Proxy 攔截、轉送並記錄攻擊流量，Agent 會先將資料暫存於本地 SQLite，再定時回傳至 Server。Server 端使用 PostgreSQL 儲存攻擊日誌，並可搭配 Filebeat、Elasticsearch、Kibana 與 ElastAlert 建立日誌分析、視覺化與告警機制。多個蜜罐節點之間也可互相連動，形成更接近真實工控場域的蜜網環境。
 

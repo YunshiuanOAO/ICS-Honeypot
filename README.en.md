@@ -2,7 +2,7 @@
   <a href="./README.md">繁體中文</a> | <strong>English</strong>
 </p>
 
-# ICS Honeypot Streetlight Simulation System
+# ICS Honeypot Simulation System
 
 <p align="center">
   <img src="./assets/distributed-honeypot-logo-white.png" alt="Distributed ICS Honeypot Logo" width="260">
@@ -23,7 +23,7 @@
 
 ## Overview
 
-This project is a distributed ICS Honeypot streetlight simulation system built with Python. It is designed to emulate industrial control devices, attract attack traffic, and centralize security analysis. The system uses a separated Server and Honeypot Agent architecture. The Server manages honeypot nodes, deployment configuration, attack log ingestion, and the web dashboard. Agents can run on different hosts or network environments and use Docker to deploy MQTT, HTTP, TCP Socket, simulated PLC, custom HMI, or other honeypot services.
+This project is a distributed ICS Honeypot simulation system built with Python. It is designed to emulate industrial control devices, attract attack traffic, and centralize security analysis. The system uses a separated Server and Honeypot Agent architecture. The Server manages honeypot nodes, deployment configuration, attack log ingestion, and the web dashboard. Agents can run on different hosts or network environments and use Docker to deploy MQTT, HTTP, TCP Socket, simulated PLC, custom HMI, or other honeypot services.
 
 Traffic to honeypot services is intercepted, forwarded, and recorded through a Proxy layer. Each Agent first buffers logs locally in SQLite, then periodically uploads service status and attack logs to the Server. The Server stores attack logs in PostgreSQL and can integrate Filebeat, Elasticsearch, Kibana, and ElastAlert for log collection, visualization, analysis, and alerting. Multiple honeypot nodes can also interact with one another to form a honeynet that better resembles a real ICS environment.
 
