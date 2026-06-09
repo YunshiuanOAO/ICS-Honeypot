@@ -77,6 +77,9 @@ class NodeAgent:
         self.request_timeout = int(os.environ.get("AGENT_REQUEST_TIMEOUT", "15"))
         self.upload_batch_size = int(os.environ.get("AGENT_UPLOAD_BATCH_SIZE", "200"))
         self.collect_max_lines_per_file = int(os.environ.get("AGENT_COLLECT_MAX_LINES_PER_FILE", "5000"))
+        self.log_retention_days = int(os.environ.get("CLIENT_LOG_RETENTION_DAYS", "30"))
+        self.log_cleanup_interval = int(os.environ.get("CLIENT_LOG_CLEANUP_INTERVAL_SECONDS", "3600"))
+        self._last_log_cleanup_time = 0
 
     def start(self):
         self.running = True
@@ -121,6 +124,7 @@ class NodeAgent:
                 self._collect_whitelist_logs()
                 self._upload_logs()
                 self._upload_whitelist_logs()
+                self._cleanup_old_local_logs()
             except Exception as exc:
                 print(f"Sync error: {exc}")
             time.sleep(5)
@@ -616,6 +620,13 @@ class NodeAgent:
             mark_uploaded=self.db.mark_whitelist_uploaded,
             label="Whitelist log",
         )
+
+    def _cleanup_old_local_logs(self):
+        now = time.time()
+        if now - self._last_log_cleanup_time < self.log_cleanup_interval:
+            return
+        self._last_log_cleanup_time = now
+        self.db.delete_old_logs(retention_days=self.log_retention_days)
 
     def _fetch_config(self):
         try:

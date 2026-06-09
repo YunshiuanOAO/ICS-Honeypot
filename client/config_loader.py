@@ -32,17 +32,28 @@ class ConfigLoader:
         if isinstance(item, dict):
             path = str(item.get("path") or "").strip()
             content = item.get("content")
+            encoding = str(item.get("encoding") or "text").strip().lower()
+            size_bytes = item.get("size_bytes")
         else:
             path = ""
             content = ""
+            encoding = "text"
+            size_bytes = None
 
         if not path:
             path = f"file-{index + 1}.txt"
 
-        return {
+        normalized = {
             "path": path.replace("\\", "/"),
             "content": "" if content is None else str(content),
         }
+        if encoding == "base64":
+            normalized["encoding"] = "base64"
+        else:
+            normalized["encoding"] = "text"
+        if isinstance(size_bytes, int):
+            normalized["size_bytes"] = size_bytes
+        return normalized
 
     def _default_files(self, deployment_type):
         defaults = {

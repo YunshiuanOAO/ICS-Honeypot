@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import os
 import re
@@ -79,6 +81,34 @@ class DockerDeploymentManager:
     # and contain binary data — so we skip them when re-reading the package.
     _RUNTIME_DIR_NAMES = {"data", "logs", "db", "node_modules", ".git", "__pycache__"}
 
+    def _file_entry_from_bytes(self, relative_path, raw):
+        if b"\x00" not in raw:
+            try:
+                return {
+                    "path": relative_path,
+                    "content": raw.decode("utf-8"),
+                    "encoding": "text",
+                    "size_bytes": len(raw),
+                }
+            except UnicodeDecodeError:
+                pass
+
+        return {
+            "path": relative_path,
+            "content": base64.b64encode(raw).decode("ascii"),
+            "encoding": "base64",
+            "size_bytes": len(raw),
+        }
+
+    def _file_entry_to_bytes(self, item):
+        content = item.get("content") or ""
+        if item.get("encoding") == "base64":
+            try:
+                return base64.b64decode(str(content), validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError(f"Invalid base64 content for {item.get('path') or 'file'}: {exc}") from exc
+        return str(content).encode("utf-8")
+
     def _read_local_files(self, source_root):
         files = []
         if not os.path.isdir(source_root):
@@ -105,16 +135,7 @@ class DockerDeploymentManager:
                     # Unreadable for any other reason — skip rather than crash.
                     continue
 
-                # Skip obvious binary content; the package only contains source/config.
-                if b"\x00" in raw:
-                    continue
-                try:
-                    content = raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    # Not text — skip rather than upload corrupted content.
-                    continue
-
-                files.append({"path": relative_path, "content": content})
+                files.append(self._file_entry_from_bytes(relative_path, raw))
         return files
 
     def _infer_exposed_ports(self, deployment):
@@ -492,8 +513,8 @@ class DockerDeploymentManager:
                 safe_parts = [part for part in relative_path.split("/") if part not in ("", ".", "..")]
                 file_path = os.path.join(source_root, *safe_parts)
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                with open(file_path, "w", encoding="utf-8") as handle:
-                    handle.write(item.get("content") or "")
+                with open(file_path, "wb") as handle:
+                    handle.write(self._file_entry_to_bytes(item))
 
         env_path = os.path.join(source_root, ".env")
         with open(env_path, "w", encoding="utf-8") as handle:

@@ -1,7 +1,7 @@
 import sqlite3
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 class LogDB:
@@ -53,6 +53,8 @@ class LogDB:
 
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_logs_uploaded_id ON logs (uploaded, id)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_whitelist_logs_uploaded_id ON whitelist_logs (uploaded, id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs (timestamp)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_whitelist_logs_timestamp ON whitelist_logs (timestamp)')
 
                 conn.commit()
             except Exception as e:
@@ -132,6 +134,44 @@ class LogDB:
                 conn.commit()
             except sqlite3.Error as e:
                 print(f"[LogDB] Error marking logs as uploaded: {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+    def delete_old_logs(self, retention_days=30):
+        """Delete local attack/whitelist logs older than retention_days."""
+        try:
+            retention_days = int(retention_days)
+        except (TypeError, ValueError):
+            retention_days = 30
+        if retention_days <= 0:
+            retention_days = 30
+
+        cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+        with self._lock:
+            conn = None
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM logs WHERE timestamp < ?', (cutoff,))
+                deleted_logs = cursor.rowcount if cursor.rowcount is not None else 0
+                cursor.execute('DELETE FROM whitelist_logs WHERE timestamp < ?', (cutoff,))
+                deleted_whitelist_logs = cursor.rowcount if cursor.rowcount is not None else 0
+                conn.commit()
+                total = deleted_logs + deleted_whitelist_logs
+                if total:
+                    print(
+                        f"[LogDB] Deleted {total} local logs older than {retention_days} days "
+                        f"(logs={deleted_logs}, whitelist_logs={deleted_whitelist_logs})"
+                    )
+                return {
+                    "logs": deleted_logs,
+                    "whitelist_logs": deleted_whitelist_logs,
+                    "cutoff": cutoff,
+                }
+            except sqlite3.Error as e:
+                print(f"[LogDB] Error deleting old logs: {e}")
+                return {"logs": 0, "whitelist_logs": 0, "cutoff": cutoff, "error": str(e)}
             finally:
                 if conn:
                     conn.close()

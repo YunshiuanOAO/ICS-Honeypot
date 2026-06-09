@@ -7,6 +7,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 import asyncio
+import base64
+import binascii
 import uvicorn
 import os
 import shutil
@@ -645,6 +647,36 @@ def _safe_extract_zip(archive_path: str, extract_dir: str):
     return extracted_files
 
 
+def _deployment_file_entry(relative_path: str, raw: bytes) -> Dict[str, Any]:
+    if b"\x00" not in raw:
+        try:
+            return {
+                "path": relative_path,
+                "content": raw.decode("utf-8"),
+                "encoding": "text",
+                "size_bytes": len(raw),
+            }
+        except UnicodeDecodeError:
+            pass
+
+    return {
+        "path": relative_path,
+        "content": base64.b64encode(raw).decode("ascii"),
+        "encoding": "base64",
+        "size_bytes": len(raw),
+    }
+
+
+def _deployment_file_bytes(item: Dict[str, Any]) -> bytes:
+    content = item.get("content") or ""
+    if item.get("encoding") == "base64":
+        try:
+            return base64.b64decode(str(content), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"Invalid base64 content for {item.get('path') or 'file'}: {exc}") from exc
+    return str(content).encode("utf-8")
+
+
 def _read_extracted_files(extracted_files, extract_dir: str):
     extract_root = Path(extract_dir).resolve()
     relative_paths = []
@@ -668,15 +700,7 @@ def _read_extracted_files(extracted_files, extract_dir: str):
             continue
 
         absolute_path = extract_root / relative_path
-        try:
-            content = absolute_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            content = absolute_path.read_text(encoding="utf-8", errors="replace")
-
-        files.append({
-            "path": display_path.as_posix(),
-            "content": content,
-        })
+        files.append(_deployment_file_entry(display_path.as_posix(), absolute_path.read_bytes()))
 
     return {
         "source_dir": source_dir,
@@ -690,7 +714,7 @@ def _slugify(text: str, fallback: str = "package"):
     return cleaned or fallback
 
 
-def _save_package_to_library(name: str, source_dir: str, files: List[Dict[str, str]], archive_name: str):
+def _save_package_to_library(name: str, source_dir: str, files: List[Dict[str, Any]], archive_name: str):
     package_id = uuid.uuid4().hex
     package_root = os.path.join(PACKAGE_LIBRARY_DIR, package_id)
     package_source_dir = _slugify(source_dir or Path(archive_name).stem, "imported-package")
@@ -707,13 +731,16 @@ def _save_package_to_library(name: str, source_dir: str, files: List[Dict[str, s
             continue
         target_path = os.path.join(package_files_root, *safe_parts)
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        content = item.get("content") or ""
-        with open(target_path, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        normalized_files.append({
+        raw = _deployment_file_bytes(item)
+        with open(target_path, "wb") as handle:
+            handle.write(raw)
+        normalized_item = {
             "path": "/".join(safe_parts),
-            "content": content,
-        })
+            "content": item.get("content") or "",
+            "encoding": item.get("encoding") or "text",
+            "size_bytes": len(raw),
+        }
+        normalized_files.append(normalized_item)
 
     metadata = {
         "id": package_id,
@@ -781,14 +808,7 @@ def _load_package_from_library(package_id: str):
             relative_path = os.path.relpath(absolute_path, package_files_root).replace("\\", "/")
             if relative_path.startswith("__MACOSX/") or "/__MACOSX/" in relative_path:
                 continue
-            try:
-                content = Path(absolute_path).read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                content = Path(absolute_path).read_text(encoding="utf-8", errors="replace")
-            files.append({
-                "path": relative_path,
-                "content": content,
-            })
+            files.append(_deployment_file_entry(relative_path, Path(absolute_path).read_bytes()))
 
     return {
         **metadata,

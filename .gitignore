@@ -121,3 +121,4 @@ tools/
 
 # AI assistant local settings (CLAUDE.md is tracked as project docs)
 .claude/
+CLAUDE.md

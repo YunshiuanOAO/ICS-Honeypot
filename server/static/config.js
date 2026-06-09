@@ -38,6 +38,28 @@ function escapeHtml(text) {
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
+function isBinaryFile(file) {
+    return file && file.encoding === "base64";
+}
+
+function formatBytes(bytes) {
+    const size = Number(bytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return "unknown size";
+    const units = ["B", "KB", "MB", "GB"];
+    let value = size;
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+    }
+    return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function markDeploymentFilesDirty(deployment) {
+    if (!deployment) return;
+    deployment._files_dirty = true;
+}
+
 // Normalize a deployment's proxy field(s) into a list. Accepts the new
 // `proxies` array, the legacy `proxy` dict, or neither.
 function normalizeProxies(deployment) {
@@ -173,7 +195,8 @@ function addFile(deploymentId, event) {
     if (!deployment) return;
     
     const newIndex = deployment.files.length;
-    deployment.files.push({ path: `new-file-${newIndex + 1}.txt`, content: "" });
+    deployment.files.push({ path: `new-file-${newIndex + 1}.txt`, content: "", encoding: "text" });
+    markDeploymentFilesDirty(deployment);
     renderSidebar();
     selectView(`file-${deploymentId}-${newIndex}`);
 }
@@ -215,6 +238,7 @@ async function handleZipUpload(deploymentId, input, event) {
         }
 
         deployment.files = Array.isArray(data.files) ? data.files : [];
+        markDeploymentFilesDirty(deployment);
         if (data.source_dir) {
             deployment.source_dir = data.source_dir;
         }
@@ -245,6 +269,7 @@ function removeFile(deploymentId, fileIndex, event) {
     if (!deployment) return;
     
     deployment.files.splice(fileIndex, 1);
+    markDeploymentFilesDirty(deployment);
     renderSidebar();
     selectView(`deployment-${deploymentId}`);
 }
@@ -271,7 +296,7 @@ function renderSidebar() {
             <input id="zip-upload-${makeDomId(d.id)}" type="file" accept=".zip,application/zip" class="hidden" onchange="handleZipUpload('${d.id}', this, event)">
             ${d.files.map((f, i) => `
                 <div class="tree-item level-2" id="nav-file-${d.id}-${i}" onclick="selectView('file-${d.id}-${i}')">
-                    <i data-lucide="file-code"></i>
+                    <i data-lucide="${isBinaryFile(f) ? 'image' : 'file-code'}"></i>
                     <span>${escapeHtml(f.path || 'Unnamed File')}</span>
                     <div class="tree-actions">
                         <button onclick="removeFile('${d.id}', ${i}, event)" title="Delete File"><i data-lucide="x"></i></button>
@@ -502,6 +527,7 @@ function renderMainEditor() {
         if (!deployment || !deployment.files[fileIndex]) { selectView('agent-settings'); return; }
         
         const file = deployment.files[fileIndex];
+        const binary = isBinaryFile(file);
         
         header.innerHTML = `
             <span style="opacity:0.7">Deployments / ${escapeHtml(deployment.name)} / </span> 
@@ -509,9 +535,31 @@ function renderMainEditor() {
             onchange="updateFilePath('${deploymentId}', ${fileIndex}, this.value)" placeholder="Filename (e.g. Dockerfile)">
         `;
         
-        content.innerHTML = `
-            <textarea class="code-textarea" onchange="updateFileContent('${deploymentId}', ${fileIndex}, this.value)">${escapeHtml(file.content)}</textarea>
-        `;
+        if (binary) {
+            content.innerHTML = `
+                <div class="settings-form">
+                    <h3 style="margin-top:0; display:flex; align-items:center; gap:8px;">
+                        <i data-lucide="image"></i>
+                        Binary Asset
+                    </h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Encoding</label>
+                            <input type="text" value="base64" disabled>
+                        </div>
+                        <div class="form-group">
+                            <label>Size</label>
+                            <input type="text" value="${escapeHtml(formatBytes(file.size_bytes))}" disabled>
+                        </div>
+                    </div>
+                    <p class="text-muted">Binary files are preserved for deployment but hidden from the text editor to keep the page responsive.</p>
+                </div>
+            `;
+        } else {
+            content.innerHTML = `
+                <textarea class="code-textarea" onchange="updateFileContent('${deploymentId}', ${fileIndex}, this.value)">${escapeHtml(file.content)}</textarea>
+            `;
+        }
     }
 
     // Replace any <i data-lucide="..."> placeholders the editor just rendered.
@@ -639,11 +687,11 @@ function updateProxy(deploymentId, index, field, value) {
 }
 function updateFilePath(depId, idx, path) {
     const d = agentConfig.deployments.find(x => x.id === depId);
-    if(d && d.files[idx]) { d.files[idx].path = path; renderSidebar(); }
+    if(d && d.files[idx]) { d.files[idx].path = path; markDeploymentFilesDirty(d); renderSidebar(); }
 }
 function updateFileContent(depId, idx, content) {
     const d = agentConfig.deployments.find(x => x.id === depId);
-    if(d && d.files[idx]) d.files[idx].content = content;
+    if(d && d.files[idx]) { d.files[idx].content = content; d.files[idx].encoding = "text"; markDeploymentFilesDirty(d); }
 }
 
 // Validate configuration before saving
@@ -713,10 +761,16 @@ async function saveConfig() {
     // Original Node ID used for the endpoint to know who we are updating
     const originalNodeId = NODE_ID; 
     
-    // Mark each deployment with a timestamp so the client knows to re-sync files
+    // Mark only package-file changes so ordinary setting saves do not force a full package re-sync.
     const now = Date.now();
     for (const d of agentConfig.deployments) {
-        d.files_updated_at = now;
+        if (d._files_dirty || !d.files_updated_at) {
+            d.files_updated_at = now;
+        }
+    }
+    const configToSave = clone(agentConfig);
+    for (const d of configToSave.deployments || []) {
+        delete d._files_dirty;
     }
     
     try {
@@ -727,7 +781,7 @@ async function saveConfig() {
                 node_id: originalNodeId,
                 new_node_id: agentConfig.node_id,
                 name: agentConfig.name,
-                config: agentConfig
+                config: configToSave
             })
         });
 
@@ -744,6 +798,9 @@ async function saveConfig() {
         }
         
         Toast.success("Configuration saved successfully!");
+        for (const d of agentConfig.deployments) {
+            d._files_dirty = false;
+        }
         
         // If node ID changed, update the URL without refreshing
         if (agentConfig.node_id !== originalNodeId) {
