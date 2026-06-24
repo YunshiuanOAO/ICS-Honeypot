@@ -1148,7 +1148,11 @@ async def reset_agent(node_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/recent_logs", dependencies=[Depends(require_session)])
-async def recent_logs(limit: str = "50"):
+async def recent_logs(
+    limit: str = "50",
+    hide_agent_ips: bool = True,
+    hide_private_ips: bool = True,
+):
     if str(limit).lower() == "all":
         parsed_limit = 500
     else:
@@ -1157,7 +1161,12 @@ async def recent_logs(limit: str = "50"):
         except (TypeError, ValueError):
             parsed_limit = 50
     try:
-        logs = await db.get_recent_logs(limit=parsed_limit)
+        exclude_ips = await db.get_agent_ips() if hide_agent_ips else []
+        logs = await db.get_recent_logs(
+            limit=parsed_limit,
+            exclude_ips=exclude_ips,
+            hide_private_ips=hide_private_ips,
+        )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="Recent logs query timed out; retry shortly")
     return logs

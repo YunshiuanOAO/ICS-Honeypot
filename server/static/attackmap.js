@@ -5,13 +5,13 @@
 
 // ─── GeoIP Cache ───────────────────────────────────────────────────────────
 const geoCache = new Map();
-const PRIVATE_IP_REGEX = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.)/;
+const PRIVATE_IP_REGEX = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.|0\.|::1$|fc|fd)/i;
 
 // Default location for private/unresolvable IPs (center of map)
 const DEFAULT_LOCATION = { lat: 0, lon: 0, country: "Private Network", city: "Local" };
 
 async function resolveGeoIP(ip) {
-    if (!ip || PRIVATE_IP_REGEX.test(ip)) {
+    if (!ip || isPrivateIp(ip)) {
         return { ...DEFAULT_LOCATION, ip };
     }
     if (geoCache.has(ip)) return geoCache.get(ip);
@@ -40,6 +40,10 @@ async function resolveGeoIP(ip) {
     const fallback = { ...DEFAULT_LOCATION, ip };
     geoCache.set(ip, fallback);
     return fallback;
+}
+
+function isPrivateIp(ip) {
+    return PRIVATE_IP_REGEX.test(String(ip || "").trim());
 }
 
 // ─── Map Projection Helpers ────────────────────────────────────
@@ -71,6 +75,7 @@ class AttackMap {
         this.feedEl = null;
         this.feedCount = 0;
         this.totalAttacks = 0;
+        this.uniqueAttackers = new Set();
         this.width = 0;
         this.height = 0;
         this.land = null; // D3 land feature
@@ -339,11 +344,12 @@ class AttackMap {
         });
 
         this.totalAttacks++;
+        if (srcGeo.ip) this.uniqueAttackers.add(srcGeo.ip);
         const totalEl = document.getElementById("attackmap-total");
         if (totalEl) totalEl.textContent = this.totalAttacks;
 
         const uniqueEl = document.getElementById("attackmap-unique");
-        if (uniqueEl) uniqueEl.textContent = geoCache.size;
+        if (uniqueEl) uniqueEl.textContent = this.uniqueAttackers.size;
 
         this._addFeedEntry(srcGeo, dstGeo, protocol, log);
     }
@@ -556,8 +562,15 @@ class AttackMap {
 
     async _pollLogs() {
         try {
-            const logs = await fetch("/api/recent_logs?limit=200").then(r => r.json());
+            const params = new URLSearchParams({
+                limit: "200",
+                hide_agent_ips: "true",
+                hide_private_ips: "true",
+            });
+            const logs = await fetch(`/api/recent_logs?${params.toString()}`).then(r => r.json());
+            const agentIps = new Set((this.agentsCache || []).map(a => a.ip).filter(Boolean));
             for (const log of logs) {
+                if (!log.attacker_ip || isPrivateIp(log.attacker_ip) || agentIps.has(log.attacker_ip)) continue;
                 const logId = log.id;
                 if (this.seenLogIds.has(logId)) continue;
                 this.seenLogIds.add(logId);

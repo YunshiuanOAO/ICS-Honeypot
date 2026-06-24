@@ -460,16 +460,51 @@ class ServerDB:
                 await db.commit()
         return len(rows)
 
-    async def get_recent_logs(self, limit=100):
+    @staticmethod
+    def _not_private_ip_sql(column: str) -> str:
+        private_checks = [
+            f"{column} LIKE '10.%'",
+            f"{column} LIKE '127.%'",
+            f"{column} LIKE '169.254.%'",
+            f"{column} LIKE '192.168.%'",
+            f"{column} LIKE '0.%'",
+            f"{column} = '::1'",
+            f"lower({column}) LIKE 'fc%'",
+            f"lower({column}) LIKE 'fd%'",
+        ]
+        private_checks.extend(f"{column} LIKE '172.{i}.%'" for i in range(16, 32))
+        return f"NOT ({' OR '.join(private_checks)})"
+
+    async def get_recent_logs(self, limit=100, exclude_ips=None, hide_private_ips=False):
         async with aiosqlite.connect(self.db_path, timeout=20) as db:
             db.row_factory = aiosqlite.Row
+            where = ["attacker_ip IS NOT NULL", "attacker_ip != ''"]
+            params = []
+            exclude_ips = [ip for ip in (exclude_ips or []) if ip]
+            if exclude_ips:
+                placeholders = ",".join("?" for _ in exclude_ips)
+                where.append(f"attacker_ip NOT IN ({placeholders})")
+                params.extend(exclude_ips)
+            if hide_private_ips:
+                where.append(self._not_private_ip_sql("attacker_ip"))
+            where_sql = " AND ".join(where)
             if limit is None:
-                cursor_ctx = db.execute('SELECT * FROM logs ORDER BY id DESC')
+                cursor_ctx = db.execute(f"SELECT * FROM logs WHERE {where_sql} ORDER BY id DESC", params)
             else:
-                cursor_ctx = db.execute('SELECT * FROM logs ORDER BY id DESC LIMIT ?', (limit,))
+                cursor_ctx = db.execute(
+                    f"SELECT * FROM logs WHERE {where_sql} ORDER BY id DESC LIMIT ?",
+                    [*params, limit],
+                )
             async with cursor_ctx as cursor:
                 rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+    async def get_agent_ips(self):
+        async with aiosqlite.connect(self.db_path, timeout=20) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT DISTINCT ip FROM agents WHERE ip IS NOT NULL AND ip != ''") as cursor:
+                rows = await cursor.fetchall()
+        return [row["ip"] for row in rows]
 
     async def delete_agent_logs(self, node_id):
         """Delete all logs for a specific agent"""

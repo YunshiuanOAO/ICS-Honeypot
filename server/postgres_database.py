@@ -532,11 +532,45 @@ class PostgresServerDB:
                     await self._upsert_ip_log_summaries(conn, rows)
         return len(rows)
 
-    async def get_recent_logs(self, limit=100):
+    @staticmethod
+    def _not_private_ip_sql(column: str) -> str:
+        return (
+            "NOT ("
+            f"{column} LIKE '10.%' OR "
+            f"{column} LIKE '127.%' OR "
+            f"{column} LIKE '169.254.%' OR "
+            f"{column} LIKE '192.168.%' OR "
+            f"{column} LIKE '0.%' OR "
+            f"{column} = '::1' OR "
+            f"{column} ILIKE 'fc%' OR "
+            f"{column} ILIKE 'fd%' OR "
+            f"{column} ~ '^172\\.(1[6-9]|2[0-9]|3[0-1])\\.'"
+            ")"
+        )
+
+    async def get_recent_logs(self, limit=100, exclude_ips=None, hide_private_ips=False):
         pool = await self._ensure_pool()
         if limit is None:
             limit = 500
-        rows = await pool.fetch("SELECT * FROM logs ORDER BY id DESC LIMIT $1", limit)
+        params = []
+        where = ["attacker_ip IS NOT NULL", "attacker_ip != ''"]
+        exclude_ips = [ip for ip in (exclude_ips or []) if ip]
+        if exclude_ips:
+            params.append(exclude_ips)
+            where.append(f"attacker_ip <> ALL(${len(params)}::text[])")
+        if hide_private_ips:
+            where.append(self._not_private_ip_sql("attacker_ip"))
+        params.append(limit)
+        rows = await pool.fetch(
+            f"""
+            SELECT *
+            FROM logs
+            WHERE {' AND '.join(where)}
+            ORDER BY id DESC
+            LIMIT ${len(params)}
+            """,
+            *params,
+        )
         return [dict(row) for row in rows]
 
     async def get_dashboard_stats(self):
@@ -620,21 +654,6 @@ class PostgresServerDB:
             params.append(value)
             return f"${len(params)}"
 
-        def not_private_ip_sql(column: str) -> str:
-            return (
-                "NOT ("
-                f"{column} LIKE '10.%' OR "
-                f"{column} LIKE '127.%' OR "
-                f"{column} LIKE '169.254.%' OR "
-                f"{column} LIKE '192.168.%' OR "
-                f"{column} LIKE '0.%' OR "
-                f"{column} = '::1' OR "
-                f"{column} ILIKE 'fc%' OR "
-                f"{column} ILIKE 'fd%' OR "
-                f"{column} ~ '^172\\.(1[6-9]|2[0-9]|3[0-1])\\.'"
-                ")"
-            )
-
         def is_long_rolling_window(value: str) -> bool:
             if not value or until:
                 return False
@@ -653,7 +672,7 @@ class PostgresServerDB:
             if exclude_ips:
                 summary_where.append(f"s.ip <> ALL({add(exclude_ips)}::text[])")
             if hide_private_ips:
-                summary_where.append(not_private_ip_sql("s.ip"))
+                summary_where.append(self._not_private_ip_sql("s.ip"))
             summary_where_sql = " AND ".join(summary_where)
             count_params = list(params)
             total = await pool.fetchval(
@@ -695,7 +714,7 @@ class PostgresServerDB:
             if exclude_ips:
                 summary_where.append(f"s.ip <> ALL({add(exclude_ips)}::text[])")
             if hide_private_ips:
-                summary_where.append(not_private_ip_sql("s.ip"))
+                summary_where.append(self._not_private_ip_sql("s.ip"))
             summary_where_sql = " AND ".join(summary_where)
             count_params = list(params)
             total = await pool.fetchval(
@@ -735,8 +754,8 @@ class PostgresServerDB:
             log_where.append(f"l.attacker_ip <> ALL({exclude_placeholder}::text[])")
             alert_where.append(f"a.attacker_ip <> ALL({exclude_placeholder}::text[])")
         if hide_private_ips:
-            log_where.append(not_private_ip_sql("l.attacker_ip"))
-            alert_where.append(not_private_ip_sql("a.attacker_ip"))
+            log_where.append(self._not_private_ip_sql("l.attacker_ip"))
+            alert_where.append(self._not_private_ip_sql("a.attacker_ip"))
         if since:
             log_where.append(f"l.timestamp >= {add(since)}")
             alert_where.append(f"a.timestamp >= {add(since)}")
