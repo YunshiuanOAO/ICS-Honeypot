@@ -216,6 +216,8 @@ with open(DATA_PATH, "r", encoding="utf-8") as f:
 STREETLIGHTS = DATA["streetlights"]
 COMMANDS = DATA["commands"]
 CMD_NAMES = DATA["cmd_names"]
+_brightness_state = {}
+_brightness_lock = threading.Lock()
 
 
 def _load_map_export():
@@ -254,7 +256,50 @@ def _is_daylight_off_window(now=None):
     return hour >= start or hour < end
 
 
+def _hex_byte_at(hex_data, byte_number):
+    start = (byte_number - 1) * 2
+    end = start + 2
+    if len(hex_data) < end:
+        return None
+    try:
+        return int(hex_data[start:end], 16)
+    except ValueError:
+        return None
+
+
+def _extract_brightness_from_hex(topic, hex_data):
+    if not isinstance(hex_data, str) or len(hex_data) < 6:
+        return None
+    hex_data = hex_data.strip().upper()
+    cmd_byte = hex_data[4:6].lower()
+    if topic == TOPIC_CMD and cmd_byte == "52":
+        return _hex_byte_at(hex_data, 10)
+    if topic == TOPIC_RESP and cmd_byte in ("37", "51", "53"):
+        return _hex_byte_at(hex_data, 14)
+    if topic == TOPIC_RESP and cmd_byte == "80":
+        return _hex_byte_at(hex_data, 24)
+    return None
+
+
+def _set_brightness(mac, brightness):
+    if not mac or brightness is None:
+        return
+    brightness = max(0, min(int(brightness), 100))
+    with _brightness_lock:
+        _brightness_state[mac.upper()] = brightness
+
+
+def _get_brightness(mac):
+    if not mac:
+        return None
+    with _brightness_lock:
+        return _brightness_state.get(mac.upper())
+
+
 def _simulated_brightness(mac, marker_index, device_index, now=None):
+    current = _get_brightness(mac)
+    if current is not None:
+        return current
     if _is_daylight_off_window(now):
         return 0
     timestamp = time.time() if now is None else float(now)
@@ -404,14 +449,21 @@ def parse_payload(topic, hex_data):
         msg_type = "periodic_report"
     else:
         msg_type = "response"
-    return {
+    mac = extract_mac(hex_data)
+    brightness = _extract_brightness_from_hex(topic, hex_data)
+    if topic == TOPIC_RESP and brightness is not None:
+        _set_brightness(mac, brightness)
+    event = {
         "topic": topic,
         "type": msg_type,
         "command": cmd_name,
-        "mac": extract_mac(hex_data),
+        "mac": mac,
         "data": hex_data,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if brightness is not None:
+        event["brightness"] = brightness
+    return event
 
 
 def _enable_tcp_keepalive(sock):

@@ -508,22 +508,48 @@
             font-family: "Courier New", monospace;
             font-size: 13px;
         }
-        .cmd-grid {
+        .brightness-control {
             display: grid;
-            grid-template-columns: 1fr;
-            gap: 8px;
+            gap: 10px;
         }
-        .cmd-btn {
+        .brightness-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 800;
+        }
+        .brightness-value {
+            color: #0f172a;
+            font-size: 20px;
+            font-weight: 900;
+        }
+        .brightness-slider {
+            width: 100%;
+            accent-color: var(--blue);
+        }
+        .brightness-scale {
+            display: flex;
+            justify-content: space-between;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 800;
+        }
+        .brightness-send {
             height: 42px;
             border: 0;
             border-radius: 10px;
+            background: var(--blue);
             color: #ffffff;
             font-weight: 900;
         }
-        .cmd-btn:disabled { cursor: not-allowed; opacity: .45; }
-        .btn-spw { background: var(--red); }
-        .btn-sgw { background: var(--blue); }
-        .btn-sra { background: var(--violet); }
+        .brightness-send:disabled,
+        .brightness-slider:disabled {
+            cursor: not-allowed;
+            opacity: .45;
+        }
         .send-custom {
             height: 40px;
             border: 0;
@@ -861,10 +887,14 @@
                                     <select class="mac-select" id="macSelect"></select>
                                     <div class="hint" id="nodeHint"></div>
                                 </div>
-                                <div class="cmd-grid">
-                                    <button class="cmd-btn btn-spw" id="btnSpw" type="button" onclick="sendSelectedCmd('SPW')">SPW 單盞控</button>
-                                    <button class="cmd-btn btn-sgw" id="btnSgw" type="button" onclick="sendSelectedCmd('SGW')">SGW 群控</button>
-                                    <button class="cmd-btn btn-sra" id="btnSra" type="button" onclick="sendSelectedCmd('SRA')">SRA 立即回報</button>
+                                <div class="brightness-control">
+                                    <div class="brightness-head">
+                                        <span>亮度調節</span>
+                                        <strong class="brightness-value" id="brightnessValue">0%</strong>
+                                    </div>
+                                    <input class="brightness-slider" id="brightnessSlider" type="range" min="0" max="100" step="1" value="0">
+                                    <div class="brightness-scale"><span>0%</span><span>50%</span><span>100%</span></div>
+                                    <button class="brightness-send" id="btnBrightness" type="button" onclick="sendBrightness()">套用亮度</button>
                                 </div>
                             </div>
                             <div class="control-box">
@@ -991,6 +1021,7 @@
 
         socket.on('mqtt_message', (data) => {
             if (!statusDot.classList.contains('connected')) setStatusConnected('已連線');
+            applyBrightnessEvent(data);
             addLog(data);
         });
 
@@ -1010,7 +1041,10 @@
                 opt.textContent = mac;
                 select.appendChild(opt);
             }
-            select.addEventListener('change', updateCommandState);
+            select.addEventListener('change', () => {
+                syncBrightnessControlFromMac();
+                updateCommandState();
+            });
         }
 
         function initMap() {
@@ -1074,6 +1108,106 @@
         function numericValue(value) {
             const n = Number(value);
             return Number.isFinite(n) ? n : 0;
+        }
+
+        function clampBrightness(value) {
+            const n = Math.round(Number(value));
+            if (!Number.isFinite(n)) return 0;
+            return Math.max(0, Math.min(100, n));
+        }
+
+        function byteHex(value) {
+            return clampBrightness(value).toString(16).toUpperCase().padStart(2, '0');
+        }
+
+        function checksumHex(hexData) {
+            let sum = 0;
+            for (let i = 0; i < hexData.length; i += 2) {
+                sum = (sum + parseInt(hexData.slice(i, i + 2), 16)) & 0xff;
+            }
+            return sum.toString(16).toUpperCase().padStart(2, '0');
+        }
+
+        function normalizeMac(mac) {
+            return String(mac || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+        }
+
+        function buildSpwHex(mac, brightness) {
+            const cleanMac = normalizeMac(mac);
+            if (cleanMac.length !== 10) return '';
+            const body = `020B52${cleanMac}01${byteHex(brightness)}`;
+            return `${body}${checksumHex(body)}`;
+        }
+
+        function getSelectedMac() {
+            return normalizeMac(document.getElementById('macSelect').value);
+        }
+
+        function findDeviceByMac(mac) {
+            const target = normalizeMac(mac);
+            if (!target) return null;
+            for (const marker of (MAP_DATA.markers || [])) {
+                const device = markerDevices(marker).find((d) => normalizeMac(d.mac) === target);
+                if (device) return device;
+            }
+            return null;
+        }
+
+        function setBrightnessControl(value) {
+            const slider = document.getElementById('brightnessSlider');
+            const brightness = clampBrightness(value);
+            slider.value = String(brightness);
+            document.getElementById('brightnessValue').textContent = `${brightness}%`;
+        }
+
+        function updateBrightnessPreview() {
+            const slider = document.getElementById('brightnessSlider');
+            setBrightnessControl(slider.value);
+        }
+
+        function syncBrightnessControlFromMac() {
+            const selectedMac = getSelectedMac();
+            const device = findDeviceByMac(selectedMac);
+            if (device && device.brightness !== undefined) {
+                setBrightnessControl(device.brightness);
+            } else if (selectedDevice && normalizeMac(selectedDevice.mac) === selectedMac) {
+                setBrightnessControl(selectedDevice.brightness);
+            }
+        }
+
+        function applyBrightnessToDevice(mac, brightness, options = {}) {
+            const target = normalizeMac(mac);
+            if (!target) return false;
+            const value = clampBrightness(brightness);
+            let changed = false;
+            for (const marker of (MAP_DATA.markers || [])) {
+                for (const device of markerDevices(marker)) {
+                    if (normalizeMac(device.mac) === target) {
+                        device.brightness = value;
+                        changed = true;
+                    }
+                }
+            }
+            if (selectedDevice && normalizeMac(selectedDevice.mac) === target) {
+                selectedDevice.brightness = value;
+                document.getElementById('metricBrightness').textContent = valueOrDash(value, '%');
+                if (getSelectedMac() === target) setBrightnessControl(value);
+                if (!options.silent) {
+                    const hint = document.getElementById('nodeHint');
+                    hint.textContent = `gateway 已回傳目前亮度 ${value}%`;
+                    hint.style.color = '#16a34a';
+                }
+            }
+            return changed;
+        }
+
+        function applyBrightnessEvent(data) {
+            if (!data || data.topic !== 'streetlight/gateway_to_server' || data.brightness === undefined || !data.mac) return;
+            const changed = applyBrightnessToDevice(data.mac, data.brightness, { silent: data.type === 'periodic_report' });
+            if (changed) {
+                renderMarkers({ fitBounds: false });
+                refreshSelectedNodeAfterMapUpdate();
+            }
         }
 
         function isDeviceOffline(device) {
@@ -1225,6 +1359,7 @@
             document.getElementById('metricRssi').textContent = valueOrDash(selectedDevice.rssi, '');
             const macSelect = document.getElementById('macSelect');
             if (mac && COMMANDS[mac]) macSelect.value = mac;
+            setBrightnessControl(selectedDevice.brightness);
             updateCommandState();
             if (leafletMarker) leafletMarker.openPopup();
         }
@@ -1244,6 +1379,7 @@
             document.getElementById('metricVoltage').textContent = '-';
             document.getElementById('metricRssi').textContent = '-';
             document.getElementById('macSelect').value = '';
+            setBrightnessControl(0);
             updateCommandState();
             if (leafletMarker) leafletMarker.openPopup();
         }
@@ -1251,15 +1387,12 @@
         function updateCommandState() {
             const selectedMac = document.getElementById('macSelect').value;
             const hasCommands = Boolean(selectedMac && COMMANDS[selectedMac]);
-            document.getElementById('btnSpw').disabled = !hasCommands;
-            document.getElementById('btnSgw').disabled = !hasCommands;
-            document.getElementById('btnSra').disabled = !hasCommands;
+            const isGateway = selectedDevice && selectedDevice.node_type === 'gateway';
+            document.getElementById('brightnessSlider').disabled = !hasCommands || isGateway;
+            document.getElementById('btnBrightness').disabled = !hasCommands || isGateway;
             const nodeMac = selectedDevice && selectedDevice.mac;
             const hint = document.getElementById('nodeHint');
-            if (selectedDevice && selectedDevice.node_type === 'gateway') {
-                document.getElementById('btnSpw').disabled = false;
-                document.getElementById('btnSgw').disabled = false;
-                document.getElementById('btnSra').disabled = false;
+            if (isGateway) {
                 hint.textContent = '';
                 hint.style.color = '#64748b';
             } else if (!CONTROL_MACS.length) {
@@ -1269,7 +1402,7 @@
                 hint.textContent = `使用節點 MAC ${nodeMac}`;
                 hint.style.color = '#16a34a';
             } else if (nodeMac && !COMMANDS[nodeMac]) {
-                hint.textContent = `節點 MAC ${nodeMac} 尚未在 command table 建立 SPW/SGW/SRA。`;
+                hint.textContent = `節點 MAC ${nodeMac} 尚未在 command table 建立亮度控制設定。`;
                 hint.style.color = '#d97706';
             } else {
                 hint.textContent = '此地圖匯出節點未含 MAC，暫以選取的模擬 MAC 控制。';
@@ -1277,17 +1410,25 @@
             }
         }
 
-        function sendSelectedCmd(cmdType) {
+        function sendBrightness() {
             if (selectedDevice && selectedDevice.node_type === 'gateway') return;
-            const mac = document.getElementById('macSelect').value;
-            sendCmd(mac, cmdType);
-            document.getElementById('nodeHint').textContent = `已送出 ${cmdType} -> ${mac}`;
-            document.getElementById('nodeHint').style.color = '#16a34a';
-        }
-
-        function sendCmd(mac, cmdType) {
-            if (!mac || !COMMANDS[mac] || !COMMANDS[mac][cmdType]) return;
-            socket.emit('send_command', { mac: mac, cmd_type: cmdType });
+            const mac = getSelectedMac();
+            const brightness = clampBrightness(document.getElementById('brightnessSlider').value);
+            const hexData = buildSpwHex(mac, brightness);
+            const hint = document.getElementById('nodeHint');
+            if (!hexData || !COMMANDS[mac]) {
+                hint.textContent = '目前選取的 MAC 無法產生 SPW 亮度控制封包。';
+                hint.style.color = '#ef4444';
+                return;
+            }
+            if (!socket.connected) {
+                hint.textContent = '訊息連線尚未建立。';
+                hint.style.color = '#ef4444';
+                return;
+            }
+            socket.emit('send_command', { mac: mac, cmd_type: 'SPW_DIMMING', hex_data: hexData });
+            hint.textContent = `已送出亮度 ${brightness}% -> ${mac}，等待 gateway 回應`;
+            hint.style.color = '#16a34a';
         }
 
         function setHint(msg, color) {
@@ -1363,6 +1504,7 @@
         document.getElementById('customHex').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendCustom();
         });
+        document.getElementById('brightnessSlider').addEventListener('input', updateBrightnessPreview);
 
         function refreshSelectedNodeAfterMapUpdate() {
             if (!selectedDevice || selectedDevice.node_type === 'gateway') return;

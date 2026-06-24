@@ -26,7 +26,7 @@ if COMM_MODE not in ("mqtt", "socket", "both"):
 
 BROKER_HOST = os.environ.get("BROKER_HOST", "mqtt-broker")
 BROKER_PORT = int(os.environ.get("BROKER_PORT", "1883"))
-REPORT_INTERVAL = int(os.environ.get("GATEWAY_REPORT_INTERVAL", "30"))
+REPORT_INTERVAL = int(os.environ.get("GATEWAY_REPORT_INTERVAL", "600"))
 SOCKET_HOST = os.environ.get("SOCKET_HOST", "0.0.0.0")
 # 上行通道：gateway 主動 dial server
 UPSTREAM_PORT = int(os.environ.get("UPSTREAM_PORT", "15567"))
@@ -51,6 +51,120 @@ with open(DATA_PATH, "r", encoding="utf-8") as f:
 CMD_NAMES = DATA["cmd_names"]
 COMMAND_RESPONSE_MAP = DATA["command_response_map"]
 DRD10_DATA = DATA["drd10_data"]
+_brightness_state = {}
+_brightness_state_lock = threading.Lock()
+
+
+def _checksum(byte_values):
+    return sum(byte_values) & 0xFF
+
+
+def _bytes_to_hex(byte_values):
+    return "".join(f"{value & 0xFF:02X}" for value in byte_values)
+
+
+def _hex_to_bytes(hex_data):
+    return [int(hex_data[i:i + 2], 16) for i in range(0, len(hex_data), 2)]
+
+
+def _mac_bytes(mac):
+    mac = (mac or "").strip().upper()
+    if len(mac) != 10:
+        return None
+    try:
+        return _hex_to_bytes(mac)
+    except ValueError:
+        return None
+
+
+def extract_mac(hex_data):
+    if len(hex_data) >= 16:
+        return hex_data[6:16].upper()
+    return None
+
+
+def _hex_byte_at(hex_data, byte_number):
+    start = (byte_number - 1) * 2
+    end = start + 2
+    if len(hex_data) < end:
+        return None
+    try:
+        return int(hex_data[start:end], 16)
+    except ValueError:
+        return None
+
+
+def _set_brightness(mac, brightness):
+    if not mac or brightness is None:
+        return
+    brightness = max(0, min(int(brightness), 100))
+    with _brightness_state_lock:
+        _brightness_state[mac.upper()] = brightness
+
+
+def _get_brightness(mac):
+    if not mac:
+        return 50
+    with _brightness_state_lock:
+        if mac.upper() in _brightness_state:
+            return _brightness_state[mac.upper()]
+    cmd = (DATA.get("commands", {}).get(mac.upper()) or {}).get("SPW", "")
+    if cmd:
+        value = _hex_byte_at(cmd, 10)
+        if value is not None:
+            return max(0, min(value, 100))
+    return 50
+
+
+def _is_spw(hex_data):
+    return len(hex_data) == 22 and hex_data[0:2] == "02" and hex_data[2:4] == "0B" and hex_data[4:6].lower() == "52"
+
+
+def _build_lamp_status_response(response_cmd, mac, brightness, serial=0x01):
+    mac_parts = _mac_bytes(mac)
+    if mac_parts is None:
+        return None
+    brightness = max(0, min(int(brightness), 100))
+    body = [
+        0x02, 0x11, response_cmd,
+        *mac_parts,
+        serial & 0xFF,
+        0x0F,       # RSSI
+        0x00, 0x40, # Power
+        0x00,       # Voltage
+        brightness, # Dimming
+        0x03, 0xE8, # Lux
+    ]
+    body.append(_checksum(body))
+    return _bytes_to_hex(body)
+
+
+def _response_for_command(hex_data):
+    cmd_byte = hex_data[4:6].lower() if len(hex_data) >= 6 else ""
+    mac = extract_mac(hex_data)
+    if cmd_byte == "52" and _is_spw(hex_data):
+        brightness = _hex_byte_at(hex_data, 10)
+        serial = _hex_byte_at(hex_data, 9) or 0x01
+        _set_brightness(mac, brightness)
+        return _build_lamp_status_response(0x53, mac, brightness, serial=serial)
+    if cmd_byte == "50" and mac:
+        serial = _hex_byte_at(hex_data, 9) or 0x01
+        return _build_lamp_status_response(0x51, mac, _get_brightness(mac), serial=serial)
+    return COMMAND_RESPONSE_MAP.get(hex_data)
+
+
+def _with_current_brightness(hex_data, mac):
+    if not hex_data or len(hex_data) < 56:
+        return hex_data
+    try:
+        bytes_out = _hex_to_bytes(hex_data)
+    except ValueError:
+        return hex_data
+    if len(bytes_out) < 28:
+        return hex_data
+    bytes_out[23] = _get_brightness(mac)
+    bytes_out[-1] = _checksum(bytes_out[:-1])
+    return _bytes_to_hex(bytes_out)
 
 
 def _enable_tcp_keepalive(sock):
@@ -107,7 +221,7 @@ def on_message(client, userdata, msg):
             print(f"[Gateway] [MQTT] 已收到 server DRD_10 ACK")
             return
 
-        response_hex = COMMAND_RESPONSE_MAP.get(hex_data)
+        response_hex = _response_for_command(hex_data)
         if response_hex:
             client.publish(TOPIC_RESP, response_hex)
             print(f"[Gateway] 已回應: {get_cmd_name(response_hex)}  Hex: {response_hex}")
@@ -142,7 +256,7 @@ def handle_socket_command(hex_data):
         print(f"[Gateway] [DOWN] 已收到 server DRD_10 ACK")
         return
 
-    response_hex = COMMAND_RESPONSE_MAP.get(hex_data)
+    response_hex = _response_for_command(hex_data)
     if response_hex:
         if send_upstream(response_hex):
             print(f"[Gateway] [UP] 已回應: {get_cmd_name(response_hex)}  Hex: {response_hex}")
@@ -261,12 +375,13 @@ def periodic_report(client):
     while True:
         try:
             for mac, hex_data in DRD10_DATA.items():
+                report_hex = _with_current_brightness(hex_data, mac)
                 if mqtt_enabled and _broker_ready.is_set():
-                    client.publish(TOPIC_RESP, hex_data, qos=0, retain=False)
-                    print(f"[Gateway] [MQTT] 定時回報 DRD_10 - MAC: {mac}  Hex: {hex_data}")
+                    client.publish(TOPIC_RESP, report_hex, qos=0, retain=False)
+                    print(f"[Gateway] [MQTT] 定時回報 DRD_10 - MAC: {mac}  Hex: {report_hex}")
                 if socket_enabled:
-                    if send_upstream(hex_data):
-                        print(f"[Gateway] [UP] 定時回報 DRD_10 - MAC: {mac}  Hex: {hex_data}")
+                    if send_upstream(report_hex):
+                        print(f"[Gateway] [UP] 定時回報 DRD_10 - MAC: {mac}  Hex: {report_hex}")
                     else:
                         print(f"[Gateway] [UP] 略過定時回報，上行通道尚未連線 - MAC: {mac}")
         except Exception as e:
