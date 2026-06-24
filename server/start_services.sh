@@ -15,6 +15,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 PID_FILE="$SCRIPT_DIR/.server.pid"
 LOG_FILE="$SCRIPT_DIR/server.log"
 DAEMON_MODE=false
+SERVER_PORT=8000
 
 # ─────────────────────────────────────────
 # 2. Color Helpers
@@ -30,6 +31,25 @@ ok()    { echo -e "${GREEN}[OK]${NC}    $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 fail()  { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+_validate_port() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
+_load_server_env_config() {
+    local configured_port=""
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        configured_port=$(grep -E "^SERVER_PORT=" "$SCRIPT_DIR/.env" | tail -1 | cut -d'=' -f2- | xargs)
+    fi
+    configured_port="${configured_port:-8000}"
+    if ! _validate_port "$configured_port"; then
+        fail "Invalid SERVER_PORT=$configured_port in server/.env. Use a number from 1 to 65535."
+    fi
+    SERVER_PORT="$configured_port"
+}
+
+_load_server_env_config
+
 # ─────────────────────────────────────────
 # 3. Command Handling (stop / status / logs)
 # ─────────────────────────────────────────
@@ -38,22 +58,22 @@ _server_running() {
 }
 
 # Find any server PID, even if the PID file is missing/stale.
-# Combines: (a) listeners on port 8000 (via lsof / fuser / ss) and
+# Combines: (a) listeners on the configured server port (via lsof / fuser / ss) and
 # (b) python processes whose cmdline mentions main.py *and* whose cwd is
 # this server directory. Works for daemon, foreground, and manual launches.
 _discover_server_pids() {
     local pids=""
 
-    # (a) Port 8000 listeners
+    # (a) Configured server port listeners
     if command -v lsof &> /dev/null; then
-        pids="$pids $(lsof -ti :8000 2>/dev/null || true)"
+        pids="$pids $(lsof -ti :$SERVER_PORT 2>/dev/null || true)"
     fi
     if command -v fuser &> /dev/null; then
-        pids="$pids $(fuser 8000/tcp 2>/dev/null || true)"
+        pids="$pids $(fuser "$SERVER_PORT/tcp" 2>/dev/null || true)"
     fi
     if command -v ss &> /dev/null; then
         # ss "users:((\"python3\",pid=720027,fd=3))" -> extract pid=NNN
-        pids="$pids $(ss -ltnp 2>/dev/null | awk '$4 ~ /:8000$/' | grep -oE 'pid=[0-9]+' | cut -d= -f2 || true)"
+        pids="$pids $(ss -ltnp 2>/dev/null | awk -v port="$SERVER_PORT" '$4 ~ ":" port "$"' | grep -oE 'pid=[0-9]+' | cut -d= -f2 || true)"
     fi
 
     # (b) python processes running main.py. We try to filter by cwd =
@@ -136,7 +156,7 @@ case "${1:-}" in
         fi
         rm -f "$PID_FILE"
 
-        # 2. Fall back to scanning port 8000 and main.py processes —
+        # 2. Fall back to scanning the configured port and main.py processes —
         #    catches foreground / non-script launches the PID file missed.
         DISCOVERED="$(_discover_server_pids)"
         DISCOVERED="$(echo "$DISCOVERED" | xargs)"
@@ -406,9 +426,9 @@ ok "uv:     $(uv --version)"
 ok "python3: $(python3 --version)"
 
 # ─────────────────────────────────────────
-# 7. Check Port 8000
+# 7. Check Server Port
 # ─────────────────────────────────────────
-PORT=8000
+PORT="$SERVER_PORT"
 PID=$(lsof -ti :$PORT 2>/dev/null || true)
 if [ -n "$PID" ]; then
     warn "Port $PORT is occupied by PID $PID. Killing it..."
@@ -434,6 +454,9 @@ ADMIN_PASSWORD=admin
 API_KEY=${API_KEY}
 SESSION_SECRET=${SESSION_SECRET}
 
+# FastAPI listen port
+SERVER_PORT=8000
+
 # Server Public URL (set to EC2 public IP for remote deployment)
 # Leave empty for auto-detect from request headers.
 # Example: SERVER_PUBLIC_URL=http://3.25.100.200:8000
@@ -454,6 +477,14 @@ EOF
         warn "⚠️  Change ADMIN_PASSWORD before deploying to production!"
     else
         ok "server/.env already exists."
+        if ! grep -qE "^SERVER_PORT=" "$SCRIPT_DIR/.env"; then
+            cat >> "$SCRIPT_DIR/.env" <<'EOF'
+
+# FastAPI listen port
+SERVER_PORT=8000
+EOF
+            ok "Added SERVER_PORT default to server/.env."
+        fi
         if ! grep -qE "^DATABASE_URL=" "$SCRIPT_DIR/.env"; then
             cat >> "$SCRIPT_DIR/.env" <<'EOF'
 
@@ -494,7 +525,7 @@ EOF
             cat > "$REPO_ROOT/client/client_config.json" <<EOF
 {
     "node_id": "node_01",
-    "server_url": "http://localhost:8000",
+    "server_url": "http://localhost:${SERVER_PORT}",
     "deployments": []
 }
 EOF
@@ -504,6 +535,7 @@ EOF
 }
 
 init_env_files
+_load_server_env_config
 
 # ─────────────────────────────────────────
 # 9. Python Virtual Environment & Dependencies (uv)
@@ -587,6 +619,13 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     # shellcheck disable=SC1090
     . "$SCRIPT_DIR/.env"
     set +a
+    SERVER_PORT="${SERVER_PORT:-8000}"
+    if ! _validate_port "$SERVER_PORT"; then
+        fail "Invalid SERVER_PORT=$SERVER_PORT in server/.env. Use a number from 1 to 65535."
+    fi
+    if [ -z "${SERVER_INGEST_URL:-}" ]; then
+        export SERVER_INGEST_URL="http://host.docker.internal:${SERVER_PORT}/api/alerts/ingest"
+    fi
 else
     warn "$SCRIPT_DIR/.env not found — ElastAlert webhook may post without an API key."
 fi
@@ -605,7 +644,7 @@ ok "ELK Stack started (Elasticsearch, Kibana, Filebeat, ElastAlert)."
 cd "$SCRIPT_DIR" || exit
 
 # Detect public URL for display
-SERVER_URL="http://localhost:8000"
+SERVER_URL="http://localhost:${SERVER_PORT}"
 KIBANA_URL="http://localhost:5601"
 if [ -f "$SCRIPT_DIR/.env" ]; then
     PUBLIC_URL=$(grep -E "^SERVER_PUBLIC_URL=" "$SCRIPT_DIR/.env" | cut -d'=' -f2- | xargs)

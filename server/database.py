@@ -180,7 +180,8 @@ class ServerDB:
             # by main.py's get_server_public_url() upon first heartbeat.
             config = {
                 "node_id": node_id,
-                "server_url": os.environ.get("SERVER_PUBLIC_URL", "").strip() or "http://localhost:8000",
+                "server_url": os.environ.get("SERVER_PUBLIC_URL", "").strip()
+                or f"http://localhost:{os.environ.get('SERVER_PORT', '8000').strip() or '8000'}",
                 "deployments": []
             }
         

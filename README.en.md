@@ -141,6 +141,8 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=change-me
 API_KEY=shared-agent-key
 SESSION_SECRET=change-this-session-secret
+SERVER_PORT=8000
+SERVER_PUBLIC_URL=http://127.0.0.1:8000
 
 POSTGRES_DB=honeypot
 POSTGRES_USER=honeypot
@@ -149,7 +151,7 @@ POSTGRES_PORT=5432
 DATABASE_URL=postgresql://honeypot:honeypot_change_me@127.0.0.1:5432/honeypot
 ```
 
-`API_KEY` must match the Client Agent configuration so Agents can fetch deployment settings and upload logs.
+`API_KEY` must match the Client Agent configuration so Agents can fetch deployment settings and upload logs. To deploy the Server on a custom port, change `SERVER_PORT` and make `SERVER_PUBLIC_URL` use the same port.
 
 ### 4. Configure Client Agent Environment Variables
 
@@ -175,7 +177,7 @@ Check `client/client_config.json` for `node_id` and `server_url`:
 }
 ```
 
-If the Agent and Server are on different machines, change `server_url` to the Server's actual IP address or domain.
+If the Agent and Server are on different machines, change `server_url` to the Server's actual IP address or domain. If `server/.env` uses a custom `SERVER_PORT`, this `server_url` must use the same port.
 
 ### 5. Start the Server and Analysis Services
 
@@ -187,6 +189,8 @@ After startup, open:
 
 - Dashboard: <http://127.0.0.1:8000>
 - Kibana: <http://127.0.0.1:5601>
+
+If `server/.env` sets a custom port, for example `SERVER_PORT=8081`, the dashboard becomes `http://127.0.0.1:8081`. Open the same port in your EC2 Security Group or firewall.
 
 To start only the FastAPI Server without ELK:
 

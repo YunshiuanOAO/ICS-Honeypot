@@ -99,6 +99,18 @@ def _validate_whitelist_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 auth_secrets = load_secrets()
 
 # Server public URL for client-agent communication (set in .env for EC2 deployment)
+def _load_server_port() -> int:
+    raw = os.environ.get("SERVER_PORT", "8000").strip() or "8000"
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid SERVER_PORT={raw!r}; expected an integer from 1 to 65535") from exc
+    if not 1 <= port <= 65535:
+        raise SystemExit(f"Invalid SERVER_PORT={raw!r}; expected an integer from 1 to 65535")
+    return port
+
+
+SERVER_PORT = _load_server_port()
 SERVER_PUBLIC_URL = os.environ.get("SERVER_PUBLIC_URL", "").strip()
 KIBANA_URL = os.environ.get("KIBANA_URL", "").strip()
 
@@ -114,7 +126,7 @@ def get_server_public_url(request: Request = None) -> str:
         host = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
         if host:
             return f"{scheme}://{host}"
-    return "http://localhost:8000"
+    return f"http://localhost:{SERVER_PORT}"
 
 
 app = FastAPI(title="Honeypot Central Server")
@@ -1452,4 +1464,4 @@ async def sync_elk():
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False, access_log=False)
+    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT, reload=False, access_log=False)

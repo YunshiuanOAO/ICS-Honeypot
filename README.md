@@ -196,6 +196,8 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=change-me
 API_KEY=shared-agent-key
 SESSION_SECRET=change-this-session-secret
+SERVER_PORT=8000
+SERVER_PUBLIC_URL=http://127.0.0.1:8000
 
 POSTGRES_DB=honeypot
 POSTGRES_USER=honeypot
@@ -204,7 +206,7 @@ POSTGRES_PORT=5432
 DATABASE_URL=postgresql://honeypot:honeypot_change_me@127.0.0.1:5432/honeypot
 ```
 
-`API_KEY` 必須與 Client Agent 的設定一致，Agent 才能向 Server 取得部署設定並回傳日誌。
+`API_KEY` 必須與 Client Agent 的設定一致，Agent 才能向 Server 取得部署設定並回傳日誌。若部署時要改 Server port，修改 `SERVER_PORT`，並讓 `SERVER_PUBLIC_URL` 使用相同 port。
 
 ### 4. 設定 Client Agent 環境變數
 
@@ -230,7 +232,7 @@ API_KEY=shared-agent-key
 }
 ```
 
-若 Agent 與 Server 位於不同主機，請將 `server_url` 改成 Server 的實際 IP 或網域。
+若 Agent 與 Server 位於不同主機，請將 `server_url` 改成 Server 的實際 IP 或網域。如果 `server/.env` 使用自訂 `SERVER_PORT`，這裡的 `server_url` 也要使用相同 port。
 
 ### 5. 啟動 Server 與分析服務
 
@@ -242,6 +244,8 @@ API_KEY=shared-agent-key
 
 - Dashboard: <http://127.0.0.1:8000>
 - Kibana: <http://127.0.0.1:5601>
+
+若 `server/.env` 設定了自訂 port，例如 `SERVER_PORT=8081`，Dashboard 會改為 `http://127.0.0.1:8081`，EC2 Security Group / 防火牆也需開放該 port。
 
 若只想啟動 FastAPI Server，不啟動 ELK：
 
