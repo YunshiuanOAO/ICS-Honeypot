@@ -610,7 +610,7 @@ class PostgresServerDB:
         rows = await pool.fetch("SELECT DISTINCT ip FROM agents WHERE ip IS NOT NULL AND ip != ''")
         return [row["ip"] for row in rows]
 
-    async def get_ip_summary(self, limit=200, since=None, until=None, offset=0, ip_search=None, exclude_ips=None):
+    async def get_ip_summary(self, limit=200, since=None, until=None, offset=0, ip_search=None, exclude_ips=None, hide_private_ips=False):
         pool = await self._ensure_pool()
         params = []
         exclude_ips = [ip for ip in (exclude_ips or []) if ip]
@@ -618,6 +618,21 @@ class PostgresServerDB:
         def add(value):
             params.append(value)
             return f"${len(params)}"
+
+        def not_private_ip_sql(column: str) -> str:
+            return (
+                "NOT ("
+                f"{column} LIKE '10.%' OR "
+                f"{column} LIKE '127.%' OR "
+                f"{column} LIKE '169.254.%' OR "
+                f"{column} LIKE '192.168.%' OR "
+                f"{column} LIKE '0.%' OR "
+                f"{column} = '::1' OR "
+                f"{column} ILIKE 'fc%' OR "
+                f"{column} ILIKE 'fd%' OR "
+                f"{column} ~ '^172\\.(1[6-9]|2[0-9]|3[0-1])\\.'"
+                ")"
+            )
 
         def is_long_rolling_window(value: str) -> bool:
             if not value or until:
@@ -636,6 +651,8 @@ class PostgresServerDB:
                 summary_where.append(f"s.ip ILIKE {add('%' + ip_search + '%')}")
             if exclude_ips:
                 summary_where.append(f"s.ip <> ALL({add(exclude_ips)}::text[])")
+            if hide_private_ips:
+                summary_where.append(not_private_ip_sql("s.ip"))
             summary_where_sql = " AND ".join(summary_where)
             count_params = list(params)
             total = await pool.fetchval(
@@ -676,6 +693,8 @@ class PostgresServerDB:
                 summary_where.append(f"s.ip ILIKE {add('%' + ip_search + '%')}")
             if exclude_ips:
                 summary_where.append(f"s.ip <> ALL({add(exclude_ips)}::text[])")
+            if hide_private_ips:
+                summary_where.append(not_private_ip_sql("s.ip"))
             summary_where_sql = " AND ".join(summary_where)
             count_params = list(params)
             total = await pool.fetchval(
@@ -714,6 +733,9 @@ class PostgresServerDB:
             exclude_placeholder = add(exclude_ips)
             log_where.append(f"l.attacker_ip <> ALL({exclude_placeholder}::text[])")
             alert_where.append(f"a.attacker_ip <> ALL({exclude_placeholder}::text[])")
+        if hide_private_ips:
+            log_where.append(not_private_ip_sql("l.attacker_ip"))
+            alert_where.append(not_private_ip_sql("a.attacker_ip"))
         if since:
             log_where.append(f"l.timestamp >= {add(since)}")
             alert_where.append(f"a.timestamp >= {add(since)}")

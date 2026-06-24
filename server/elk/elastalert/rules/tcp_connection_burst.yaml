@@ -1,0 +1,52 @@
+# High-rate TCP/custom activity from the same external IP.
+name: TCP Connection Burst From Single IP
+type: frequency
+index: honeypot-*
+
+num_events: 30
+timeframe:
+  minutes: 1
+
+filter:
+  - query:
+      query_string:
+        query: '(protocol:tcp OR protocol:custom)'
+  - bool:
+      must_not:
+        - query_string:
+            query: >
+              (attacker_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR attacker_ip:"::1" OR
+              src_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR src_ip:"::1")
+
+realert:
+  minutes: 10
+query_key:
+  - attacker_ip
+
+alert:
+  - post
+http_post_url: "${SERVER_INGEST_URL}"
+http_post_headers:
+  X-Api-Key: "${API_KEY}"
+http_post_static_payload:
+  signature: "TCP/custom high-rate connection burst"
+  signature_id: 7000604
+  category: "Attempted Information Leak"
+  severity: 2
+  source: "elastalert"
+http_post_payload:
+  attacker_ip: attacker_ip
+  node_id: node_id
+  protocol: protocol
+  timestamp: "@timestamp"
+  src_ip: src_ip
+  src_port: src_port
+  dst_ip: dst_ip
+  dst_port: dst_port
+  log_message: log_message

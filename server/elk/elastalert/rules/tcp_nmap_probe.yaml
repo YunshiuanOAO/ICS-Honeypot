@@ -1,0 +1,69 @@
+# Nmap and common service-detection probes against TCP/custom honeypots.
+name: TCP Nmap Or Service Probe Payload
+type: any
+index: honeypot-*
+
+filter:
+  - query:
+      query_string:
+        query: '(protocol:tcp OR protocol:custom)'
+  - bool:
+      must_not:
+        - query_string:
+            query: >
+              (attacker_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR attacker_ip:"::1" OR
+              src_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR src_ip:"::1")
+  - bool:
+      minimum_should_match: 1
+      should:
+        - wildcard: {request_data: "*Nmap*"}
+        - wildcard: {request_data: "*nmap*"}
+        - wildcard: {request_data: "*NMAP*"}
+        - wildcard: {request_data: "*GenericLines*"}
+        - wildcard: {request_data: "*GetRequest*"}
+        - wildcard: {request_data: "*HTTPOptions*"}
+        - wildcard: {request_data: "*RTSPRequest*"}
+        - wildcard: {request_data: "*SIPOptions*"}
+        - wildcard: {request_data: "*RPCCheck*"}
+        - wildcard: {request_data: "*TN3270E*"}
+        - wildcard: {request_data: "*HELP*"}
+        - wildcard: {request_data: "*OPTIONS * HTTP*"}
+        - wildcard: {request_data: "*User-Agent: Mozilla/5.0 (compatible; Nmap Scripting Engine*"}
+        - wildcard: {request_data: "*4e6d6170*"}
+        - wildcard: {request_data: "*6e6d6170*"}
+
+realert:
+  minutes: 5
+query_key:
+  - attacker_ip
+  - dst_port
+
+alert:
+  - post
+http_post_url: "${SERVER_INGEST_URL}"
+http_post_headers:
+  X-Api-Key: "${API_KEY}"
+http_post_static_payload:
+  signature: "TCP/custom Nmap or service detection probe"
+  signature_id: 7000605
+  category: "Attempted Information Leak"
+  severity: 2
+  source: "elastalert"
+http_post_payload:
+  attacker_ip: attacker_ip
+  node_id: node_id
+  protocol: protocol
+  timestamp: "@timestamp"
+  src_ip: src_ip
+  src_port: src_port
+  dst_ip: dst_ip
+  dst_port: dst_port
+  request_size_bytes: request_size_bytes
+  request_data: request_data
+  log_message: log_message

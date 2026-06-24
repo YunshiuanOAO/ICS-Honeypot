@@ -1,0 +1,195 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024">
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .band { fill: #b9b9b9; }
+      .label-band { fill: #b9b9b9; }
+      .text { font-family: "Noto Sans CJK TC", "Microsoft JhengHei", Arial, sans-serif; fill: #111111; }
+      .title { font-size: 34px; font-weight: 700; }
+      .layer { font-size: 27px; font-weight: 600; }
+      .item { font-size: 23px; font-weight: 600; }
+      .small { font-size: 18px; font-weight: 500; }
+      .tiny { font-size: 15px; font-weight: 500; }
+      .box { fill: #f4f4f4; stroke: #111111; stroke-width: 3; rx: 8; }
+      .node { fill: #f7f7f7; stroke: #111111; stroke-width: 3; rx: 10; }
+      .line { stroke: #111111; stroke-width: 3; fill: none; stroke-dasharray: 10 9; }
+      .arrow { stroke: #111111; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .solid { stroke: #111111; stroke-width: 3; fill: none; }
+      .accent { fill: #0d83d4; }
+      .brick { fill: #f05a24; }
+      .icon { fill: none; stroke: #111111; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+      .bracket { fill: none; stroke: #111111; stroke-width: 3; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#111111"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1536" height="1024"/>
+  <text class="text title" x="768" y="58" text-anchor="middle">分散式 ICS Honeypot 智慧路燈 Purdue Model</text>
+
+  <!-- Left IT / OT brackets -->
+  <path class="bracket" d="M88 92 C64 92 64 92 64 116 L64 356 C64 380 64 380 88 380"/>
+  <text class="text layer" x="30" y="246" text-anchor="middle">IT</text>
+  <path class="bracket" d="M88 408 C64 408 64 408 64 432 L64 928 C64 952 64 952 88 952"/>
+  <text class="text layer" x="30" y="692" text-anchor="middle">OT</text>
+
+  <!-- Layer bands -->
+  <rect class="label-band" x="120" y="92" width="280" height="132"/>
+  <rect class="band" x="420" y="92" width="1048" height="132"/>
+  <rect class="label-band" x="120" y="244" width="280" height="132"/>
+  <rect class="band" x="420" y="244" width="1048" height="132"/>
+  <rect class="label-band" x="120" y="408" width="280" height="150"/>
+  <rect class="band" x="420" y="408" width="1048" height="150"/>
+  <rect class="label-band" x="120" y="586" width="280" height="168"/>
+  <rect class="band" x="420" y="586" width="1048" height="168"/>
+  <rect class="label-band" x="120" y="782" width="280" height="170"/>
+  <rect class="band" x="420" y="782" width="1048" height="170"/>
+
+  <!-- Layer labels -->
+  <text class="text layer" x="260" y="142" text-anchor="middle">Enterprise</text>
+  <text class="text layer" x="260" y="176" text-anchor="middle">level 4 and 5</text>
+  <text class="text small" x="260" y="203" text-anchor="middle">中央管理與分析</text>
+
+  <text class="text layer" x="260" y="292" text-anchor="middle">Industrial DMZ</text>
+  <text class="text layer" x="260" y="326" text-anchor="middle">level 3.5</text>
+  <text class="text small" x="260" y="353" text-anchor="middle">Server / ELK / Log Pipeline</text>
+
+  <text class="text layer" x="260" y="464" text-anchor="middle">Supervisory</text>
+  <text class="text layer" x="260" y="498" text-anchor="middle">level 3 / 2</text>
+  <text class="text small" x="260" y="526" text-anchor="middle">Agent / HMI</text>
+
+  <text class="text layer" x="260" y="652" text-anchor="middle">Process control</text>
+  <text class="text layer" x="260" y="686" text-anchor="middle">level 1</text>
+  <text class="text small" x="260" y="714" text-anchor="middle">MQTT / TCP / DB</text>
+
+  <text class="text layer" x="260" y="850" text-anchor="middle">Cell / area</text>
+  <text class="text layer" x="260" y="884" text-anchor="middle">level 0</text>
+  <text class="text small" x="260" y="912" text-anchor="middle">智慧路燈設備</text>
+
+  <!-- Simple icons -->
+  <!-- Cloud firewall -->
+  <g transform="translate(1210 116)">
+    <path class="accent" d="M55 82H12C-5 82-12 59 2 49C5 28 26 18 44 28C54 9 83 11 94 31C115 29 133 45 133 66C133 75 126 82 116 82H55Z"/>
+    <rect class="brick" x="66" y="55" width="12" height="7"/><rect class="brick" x="81" y="55" width="12" height="7"/><rect class="brick" x="96" y="55" width="12" height="7"/>
+    <rect class="brick" x="73" y="65" width="12" height="7"/><rect class="brick" x="88" y="65" width="12" height="7"/><rect class="brick" x="103" y="65" width="12" height="7"/>
+  </g>
+
+  <!-- L4/5 items -->
+  <rect class="node" x="500" y="122" width="230" height="74"/>
+  <text class="text item" x="615" y="154" text-anchor="middle">FastAPI Dashboard</text>
+  <text class="text tiny" x="615" y="181" text-anchor="middle">Agent 管理 / 部署設定</text>
+
+  <rect class="node" x="780" y="122" width="220" height="74"/>
+  <text class="text item" x="890" y="154" text-anchor="middle">Kibana</text>
+  <text class="text tiny" x="890" y="181" text-anchor="middle">攻擊流量視覺化</text>
+
+  <rect class="node" x="1048" y="122" width="130" height="74"/>
+  <text class="text item" x="1113" y="154" text-anchor="middle">ElastAlert</text>
+  <text class="text tiny" x="1113" y="181" text-anchor="middle">告警</text>
+
+  <!-- L3/3.5 items -->
+  <rect class="node" x="500" y="272" width="210" height="76"/>
+  <text class="text item" x="605" y="304" text-anchor="middle">Central Server API</text>
+  <text class="text tiny" x="605" y="331" text-anchor="middle">logs / config / heartbeat</text>
+
+  <rect class="node" x="760" y="272" width="170" height="76"/>
+  <text class="text item" x="845" y="304" text-anchor="middle">PostgreSQL</text>
+  <text class="text tiny" x="845" y="331" text-anchor="middle">攻擊日誌</text>
+
+  <rect class="node" x="980" y="272" width="230" height="76"/>
+  <text class="text item" x="1095" y="304" text-anchor="middle">Filebeat / ES</text>
+  <text class="text tiny" x="1095" y="331" text-anchor="middle">日誌分析管線</text>
+
+  <rect class="node" x="1260" y="272" width="150" height="76"/>
+  <text class="text item" x="1335" y="304" text-anchor="middle">Package</text>
+  <text class="text tiny" x="1335" y="331" text-anchor="middle">Docker 套件庫</text>
+
+  <!-- L2 items -->
+  <rect class="node" x="490" y="438" width="230" height="92"/>
+  <text class="text item" x="605" y="470" text-anchor="middle">node_3</text>
+  <text class="text small" x="605" y="498" text-anchor="middle">Subscriber / HMI</text>
+  <text class="text tiny" x="605" y="522" text-anchor="middle">HTTP Proxy 80 → 8080</text>
+
+  <rect class="node" x="770" y="438" width="230" height="92"/>
+  <text class="text item" x="885" y="470" text-anchor="middle">node_2</text>
+  <text class="text small" x="885" y="498" text-anchor="middle">TCP Management</text>
+  <text class="text tiny" x="885" y="522" text-anchor="middle">Socket Server / Bridge</text>
+
+  <rect class="node" x="1050" y="438" width="250" height="92"/>
+  <text class="text item" x="1175" y="470" text-anchor="middle">Honeypot Agent</text>
+  <text class="text small" x="1175" y="498" text-anchor="middle">Docker 部署 / Proxy 控制</text>
+  <text class="text tiny" x="1175" y="522" text-anchor="middle">SQLite 暫存後回傳</text>
+
+  <!-- L1 items -->
+  <rect class="node" x="472" y="622" width="188" height="94"/>
+  <text class="text item" x="566" y="654" text-anchor="middle">node_2</text>
+  <text class="text small" x="566" y="682" text-anchor="middle">MQTT Broker</text>
+  <text class="text tiny" x="566" y="706" text-anchor="middle">1883 → 11883</text>
+
+  <rect class="node" x="694" y="622" width="190" height="94"/>
+  <text class="text item" x="789" y="654" text-anchor="middle">node_1</text>
+  <text class="text small" x="789" y="682" text-anchor="middle">Gateway</text>
+  <text class="text tiny" x="789" y="706" text-anchor="middle">TCP 5566 / 5567</text>
+
+  <rect class="node" x="918" y="622" width="196" height="94"/>
+  <text class="text item" x="1016" y="654" text-anchor="middle">node_2</text>
+  <text class="text small" x="1016" y="682" text-anchor="middle">Bridge Proxy</text>
+  <text class="text tiny" x="1016" y="706" text-anchor="middle">TCP 5568</text>
+
+  <rect class="node" x="1148" y="622" width="220" height="94"/>
+  <text class="text item" x="1258" y="654" text-anchor="middle">node_2</text>
+  <text class="text small" x="1258" y="682" text-anchor="middle">MongoDB bait</text>
+  <text class="text tiny" x="1258" y="706" text-anchor="middle">27017 → 17017</text>
+
+  <!-- L0 items -->
+  <rect class="node" x="500" y="816" width="210" height="92"/>
+  <text class="text item" x="605" y="848" text-anchor="middle">Smart Streetlight</text>
+  <text class="text small" x="605" y="876" text-anchor="middle">虛擬路燈設備</text>
+  <text class="text tiny" x="605" y="900" text-anchor="middle">streetlight_data.json</text>
+
+  <rect class="node" x="770" y="816" width="168" height="92"/>
+  <text class="text item" x="854" y="856" text-anchor="middle">Sensor</text>
+  <text class="text tiny" x="854" y="884" text-anchor="middle">狀態 / 感測資料</text>
+
+  <rect class="node" x="990" y="816" width="168" height="92"/>
+  <text class="text item" x="1074" y="856" text-anchor="middle">Actuator</text>
+  <text class="text tiny" x="1074" y="884" text-anchor="middle">亮度 / 開關</text>
+
+  <rect class="node" x="1210" y="816" width="168" height="92"/>
+  <text class="text item" x="1294" y="856" text-anchor="middle">虛擬 PLC / RTU</text>
+  <text class="text tiny" x="1294" y="884" text-anchor="middle">控制邏輯模擬</text>
+
+  <!-- Network and data flows -->
+  <path class="line" d="M605 348 L605 438"/>
+  <path class="line" d="M605 530 L566 622"/>
+  <path class="line" d="M605 530 L1016 622"/>
+  <path class="line" d="M885 530 L1016 622"/>
+  <path class="line" d="M566 716 L605 816"/>
+  <path class="line" d="M789 716 L605 816"/>
+  <path class="line" d="M789 716 L854 816"/>
+  <path class="line" d="M789 716 L1074 816"/>
+  <path class="line" d="M789 716 L1294 816"/>
+
+  <path class="line" d="M720 484 L770 484"/>
+  <path class="line" d="M1000 484 L1050 484"/>
+  <path class="line" d="M660 670 L694 670"/>
+  <path class="line" d="M884 670 L918 670"/>
+  <path class="line" d="M1114 670 L1148 670"/>
+  <text class="text small" x="890" y="585" text-anchor="middle">node_1 / node_2 / node_3 蜜網 Honeynet</text>
+
+  <path class="arrow" d="M1188 530 C1160 390 950 360 710 330"/>
+  <text class="text small" x="1040" y="386" text-anchor="middle">攻擊流量 / Proxy Logs / Status 回傳</text>
+  <path class="arrow" d="M710 300 C930 344 1120 384 1180 438"/>
+  <text class="text small" x="930" y="258" text-anchor="middle">部署設定 / Config 下發</text>
+
+  <!-- Attacker / exposed services -->
+  <g transform="translate(1320 412)">
+    <path class="accent" d="M55 82H12C-5 82-12 59 2 49C5 28 26 18 44 28C54 9 83 11 94 31C115 29 133 45 133 66C133 75 126 82 116 82H55Z"/>
+    <rect class="brick" x="66" y="55" width="12" height="7"/><rect class="brick" x="81" y="55" width="12" height="7"/><rect class="brick" x="96" y="55" width="12" height="7"/>
+    <rect class="brick" x="73" y="65" width="12" height="7"/><rect class="brick" x="88" y="65" width="12" height="7"/><rect class="brick" x="103" y="65" width="12" height="7"/>
+  </g>
+  <text class="text small" x="1390" y="524" text-anchor="middle">Attacker / Internet</text>
+  <path class="line" d="M1320 520 C1230 560 1088 586 1016 622"/>
+  <text class="text tiny" x="1220" y="582" text-anchor="middle">Exposed honeypot ports</text>
+</svg>

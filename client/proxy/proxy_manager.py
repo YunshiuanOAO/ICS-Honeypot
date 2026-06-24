@@ -21,6 +21,7 @@ from .unified_logger import UnifiedLogger
 from .tcp_proxy import TCPProxy
 from .modbus_proxy import ModbusProxy
 from .http_proxy import HTTPProxy
+from .https_proxy import HTTPSProxy
 from .mqtt_proxy import MQTTProxy
 
 
@@ -28,6 +29,7 @@ PROTOCOL_PROXY_MAP: Dict[str, Type[BaseProxy]] = {
     "tcp": TCPProxy,
     "modbus": ModbusProxy,
     "http": HTTPProxy,
+    "https": HTTPSProxy,
     "mqtt": MQTTProxy,
 }
 
@@ -36,7 +38,8 @@ DEFAULT_PORT_PROTOCOLS = {
     5020: "modbus",
     80: "http",
     8080: "http",
-    443: "http",
+    443: "https",
+    8443: "https",
     1883: "mqtt",
     8883: "mqtt",
 }

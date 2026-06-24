@@ -6,7 +6,19 @@ index: honeypot-*
 filter:
   - query:
       query_string:
-        query: 'protocol:http AND http_method:POST AND (http_status_code:200 OR http_status_code:201 OR http_status_code:204 OR http_status_code:302 OR http_status_code:303)'
+        query: 'protocol:(http OR https) AND http_method:POST AND (http_status_code:200 OR http_status_code:201 OR http_status_code:204 OR http_status_code:302 OR http_status_code:303)'
+  - bool:
+      must_not:
+        - query_string:
+            query: >
+              (attacker_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR attacker_ip:"::1" OR
+              src_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR src_ip:"::1")
   - bool:
       minimum_should_match: 1
       should:

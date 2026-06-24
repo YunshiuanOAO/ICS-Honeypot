@@ -1,0 +1,106 @@
+{
+  "id": "smart-streetlight-stack",
+  "name": "Smart Streetlight Full Stack",
+  "description": "Deploy Gateway, MQTT Broker, TCP Socket Server, MongoDB bait, and Subscriber/HMI into the same agent as separate deployments.",
+  "category": "smart-streetlight",
+  "deployments": [
+    {
+      "id": "streetlight-broker",
+      "name": "Streetlight MQTT Broker",
+      "template": "smart-streetlight-broker",
+      "source_dir": "mosquitto",
+      "package_dir": "packages/mosquitto",
+      "proxies": [
+        {
+          "name": "mqtt",
+          "protocol": "mqtt",
+          "listen_port": 1883,
+          "backend_port": 11883,
+          "container_port": 1883,
+          "enabled": true
+        }
+      ],
+      "log_paths": []
+    },
+    {
+      "id": "streetlight-mongodb",
+      "name": "Streetlight MongoDB",
+      "template": "smart-streetlight-mongodb",
+      "source_dir": "mongodb",
+      "package_dir": "packages/mongodb",
+      "proxies": [
+        {
+          "name": "mongodb",
+          "protocol": "tcp",
+          "listen_port": 27017,
+          "backend_port": 17017,
+          "container_port": 27017,
+          "enabled": true
+        }
+      ],
+      "log_paths": []
+    },
+    {
+      "id": "streetlight-socket-server",
+      "name": "Streetlight TCP Socket Server",
+      "template": "smart-streetlight-socket-server",
+      "source_dir": "socket-server",
+      "package_dir": "packages/socket-server",
+      "proxies": [
+        {
+          "name": "gateway-upstream",
+          "protocol": "tcp",
+          "listen_port": 5567,
+          "backend_port": 15567,
+          "container_port": 15567,
+          "enabled": true
+        },
+        {
+          "name": "subscriber-bridge",
+          "protocol": "tcp",
+          "listen_port": 5568,
+          "backend_port": 15568,
+          "container_port": 15568,
+          "enabled": true
+        }
+      ],
+      "log_paths": []
+    },
+    {
+      "id": "streetlight-gateway",
+      "name": "Streetlight Gateway",
+      "template": "smart-streetlight-gateway",
+      "source_dir": "gateway",
+      "package_dir": "packages/gateway",
+      "proxies": [
+        {
+          "name": "gateway-downstream",
+          "protocol": "tcp",
+          "listen_port": 5566,
+          "backend_port": 15566,
+          "container_port": 15566,
+          "enabled": true
+        }
+      ],
+      "log_paths": []
+    },
+    {
+      "id": "streetlight-subscriber",
+      "name": "Streetlight Subscriber HMI",
+      "template": "smart-streetlight-subscriber",
+      "source_dir": "subscriber",
+      "package_dir": "packages/subscriber",
+      "proxies": [
+        {
+          "name": "https-hmi",
+          "protocol": "https",
+          "listen_port": 443,
+          "backend_port": 8080,
+          "container_port": 5000,
+          "enabled": true
+        }
+      ],
+      "log_paths": []
+    }
+  ]
+}

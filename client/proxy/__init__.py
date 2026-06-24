@@ -7,6 +7,7 @@ from .unified_logger import UnifiedLogger, LogEntry
 from .tcp_proxy import TCPProxy
 from .modbus_proxy import ModbusProxy
 from .http_proxy import HTTPProxy
+from .https_proxy import HTTPSProxy
 from .mqtt_proxy import MQTTProxy
 from .proxy_manager import ProxyManager
 
@@ -18,6 +19,7 @@ __all__ = [
     "TCPProxy",
     "ModbusProxy",
     "HTTPProxy",
+    "HTTPSProxy",
     "MQTTProxy",
     "ProxyManager",
 ]

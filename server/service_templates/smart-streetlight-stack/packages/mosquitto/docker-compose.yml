@@ -1,0 +1,11 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: streetlight-mosquitto
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-11883}:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ${HONEYPOT_LOGS_DIR}:/mosquitto/log
+      - ${HONEYPOT_DATA_DIR}:/mosquitto/data

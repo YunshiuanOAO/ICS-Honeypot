@@ -13,7 +13,7 @@ run_every:
 
 # Look-back window applied to each rule's filter for "new" events
 buffer_time:
-  minutes: 2
+  minutes: 10
 
 # Elasticsearch connection
 es_host: elasticsearch

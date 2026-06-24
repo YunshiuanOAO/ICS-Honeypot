@@ -85,6 +85,78 @@ Filebeat -> Elasticsearch -> Kibana -> ElastAlert
 - 可整合 Filebeat、Elasticsearch、Kibana 與 ElastAlert 進行分析與告警。
 - 提供 Web Dashboard 管理 Agent、部署蜜罐套件與查看攻擊資料。
 
+## API 存取能力
+
+系統主要資料與管理功能皆由 FastAPI 提供。Web 管理 API 需先登入取得 session cookie；Agent 與 ElastAlert 上傳類 API 則需在 HTTP header 帶入 `X-Api-Key: <API_KEY>`。
+
+### 認證與頁面端點
+
+| Method | Endpoint | 驗證 | 功能 |
+| --- | --- | --- | --- |
+| `GET` | `/login` | Public | 顯示 Web Dashboard 登入頁。 |
+| `POST` | `/login` | Public | 使用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登入並建立 session。 |
+| `POST` | `/logout` | Session | 清除 session 並登出。 |
+| `GET` | `/` | Session | 顯示主 Dashboard 頁面。 |
+| `GET` | `/config/{node_id}` | Session | 顯示指定 Agent 的部署設定頁。 |
+
+### Agent 同步與資料上傳
+
+| Method | Endpoint | 驗證 | 功能 |
+| --- | --- | --- | --- |
+| `POST` | `/api/heartbeat` | API Key | Agent 回報 `node_id`、IP、名稱、目前設定與部署狀態；Server 會自動註冊新 Agent，並回傳 `start` / `stop` 指令。 |
+| `GET` | `/api/config/{node_id}` | API Key 或 Session | 取得指定 Agent 的部署設定、節點名稱與 whitelist，Agent 會用此端點同步最新設定。 |
+| `POST` | `/api/logs` | API Key | Agent 批次上傳攻擊日誌，body 格式為 `{ "node_id": "...", "logs": [...] }`。 |
+| `POST` | `/api/whitelist_logs` | API Key | Agent 批次上傳白名單流量紀錄；此類資料不會進入攻擊流量分析。 |
+| `POST` | `/api/alerts/ingest` | API Key | 接收 ElastAlert 或外部偵測系統送入的告警，必要欄位為 `signature` 與 `attacker_ip`。 |
+
+### Agent 管理與設定
+
+| Method | Endpoint | 驗證 | 功能 |
+| --- | --- | --- | --- |
+| `GET` | `/api/agents` | Session | 查詢所有 Agent 的狀態、IP、名稱、最後心跳與設定摘要。 |
+| `POST` | `/api/agents` | Session | 手動新增 Agent，表單欄位包含 `node_id`、`name`、`ip`、`config_json`。 |
+| `POST` | `/api/agents/{node_id}/toggle` | Session | 啟用或停用指定 Agent，停用後 Agent 會收到停止指令。 |
+| `DELETE` | `/api/agents/{node_id}` | Session | 刪除指定 Agent 與其設定。 |
+| `POST` | `/api/agents/{node_id}/reset` | Session | 重設指定 Agent，讓 Server 忘記此節點並允許它重新註冊。 |
+| `POST` | `/api/update_agent_config` | Session | 更新 Agent 的部署設定、名稱或 `node_id`；會檢查 proxy listen/backend port 是否衝突。 |
+| `GET` | `/api/whitelist?node_id={node_id}` | Session | 查詢指定 Agent 的 whitelist 設定。 |
+| `PUT` | `/api/whitelist` | Session | 更新指定 Agent 的 whitelist，下一次 Agent 拉取 config 時生效。 |
+| `GET` | `/api/whitelist_logs?limit=100&node_id={node_id}` | Session | 查詢白名單命中紀錄，可依 Agent 過濾。 |
+
+### 攻擊資料、分析與告警
+
+| Method | Endpoint | 驗證 | 功能 |
+| --- | --- | --- | --- |
+| `GET` | `/api/recent_logs?limit=50` | Session | 查詢最近攻擊日誌；`limit=all` 時最多回傳 500 筆。 |
+| `GET` | `/api/dashboard_stats` | Session | 查詢 Dashboard 統計資料，例如 Agent 數量、攻擊數、協定分布等。 |
+| `GET` | `/api/ip_analysis` | Session | 依攻擊者 IP 分組統計攻擊量、協定、觸及節點、告警數與最高嚴重度。支援 `hours`、`from_ts`、`to_ts`、`page`、`page_size`、`search`、`hide_agent_ips`、`hide_private_ips`。 |
+| `GET` | `/api/ip_details/{ip}?limit=200` | Session | 查詢單一攻擊者 IP 的封包紀錄與相關告警。 |
+| `GET` | `/api/alerts?limit=200&ip={ip}` | Session | 查詢告警清單，可依攻擊者 IP 過濾。 |
+| `POST` | `/api/admin/sync_elk` | Session | 手動將 Server 日誌匯出給 Filebeat / ELK 使用。 |
+
+### Profile、Package 與 Service Template
+
+| Method | Endpoint | 驗證 | 功能 |
+| --- | --- | --- | --- |
+| `GET` | `/api/profiles` | Session | 查詢可用的模擬設備 profile，例如 Modbus profile。 |
+| `GET` | `/api/profiles/{name}` | Session | 取得指定 profile 的完整 JSON 內容。 |
+| `POST` | `/api/import_package_zip` | Session | 上傳自訂 Docker package zip，解壓後存入 package library，並回傳可部署檔案列表。 |
+| `POST` | `/api/import_package_json` | Session | 上傳 JSON 設定並指定 `protocol`，Server 會自動產生可部署的 honeypot package。 |
+| `GET` | `/api/package_library` | Session | 查詢已匯入的 package library 清單。 |
+| `GET` | `/api/package_library/{package_id}` | Session | 取得指定 package 的 metadata 與檔案內容。 |
+| `DELETE` | `/api/package_library/{package_id}` | Session | 刪除指定 package。 |
+| `GET` | `/api/service_templates` | Session | 查詢可用的服務模板清單。 |
+| `POST` | `/api/service_templates/{template_id}/instantiate` | Session | 將指定服務模板展開成多個 deployments，匯入 Agent config 頁面。 |
+
+### 輔助 API
+
+| Method | Endpoint | 驗證 | 功能 |
+| --- | --- | --- | --- |
+| `GET` | `/api/server_info` | Public | 回傳 Server public URL 與 Kibana URL，供前端顯示與連結使用。 |
+| `GET` | `/api/geoip/{ip}` | Public | 查詢 IP 地理位置，Server 端會快取結果並處理 private IP。 |
+
+靜態頁面、Logo、CSS、JavaScript 與 README 圖片屬於前端或文件資源，不是資料 API。
+
 ## 如何安裝
 
 ### 環境需求
@@ -111,7 +183,13 @@ pip install -r requirements.txt
 
 ### 3. 設定 Server 環境變數
 
-建立 `server/.env`：
+複製範例檔並建立 `server/.env`：
+
+```bash
+cp server/.env.example server/.env
+```
+
+接著編輯 `server/.env`：
 
 ```env
 ADMIN_USERNAME=admin
@@ -130,7 +208,13 @@ DATABASE_URL=postgresql://honeypot:honeypot_change_me@127.0.0.1:5432/honeypot
 
 ### 4. 設定 Client Agent 環境變數
 
-建立 `client/.env`：
+複製範例檔並建立 `client/.env`：
+
+```bash
+cp client/.env.example client/.env
+```
+
+接著確認 `client/.env` 內的 `API_KEY` 與 Server 相同：
 
 ```env
 API_KEY=shared-agent-key
@@ -171,8 +255,23 @@ python3 main.py
 開啟另一個 terminal：
 
 ```bash
-source .venv/bin/activate
-python3 client/main.py
+cd client
+chmod +x start_agent.sh
+./start_agent.sh -d
+```
+
+`start_agent.sh` 會檢查 Docker、Python、uv 與相依套件，並使用專案根目錄的 `.venv` 啟動 Agent。若需要使用 443 等低於 1024 的連接埠，或目前使用者沒有 Docker 權限，可改用：
+
+```bash
+sudo ./start_agent.sh -d
+```
+
+常用管理指令：
+
+```bash
+./start_agent.sh status
+./start_agent.sh logs
+./start_agent.sh stop
 ```
 
 Agent 啟動後會向 Server 註冊並等待部署設定。可在 Dashboard 中新增或修改該 Agent 的蜜罐服務。

@@ -4,12 +4,13 @@ const API_BASE = "/api";
 // State
 let agentConfig = null;
 let PACKAGE_LIBRARY = [];
+let SERVICE_TEMPLATES = [];
 let currentView = 'agent-settings'; // 'agent-settings', 'whitelist', 'deployment-{id}', 'file-{deploymentId}-{fileIndex}'
 let _whitelistData = null; // Cached whitelist data for this agent
 
 async function init() {
     Toast.init();
-    await loadPackageLibrary();
+    await Promise.all([loadPackageLibrary(), loadServiceTemplates()]);
     await Promise.all([loadConfig(), loadWhitelist()]);
 }
 
@@ -100,6 +101,27 @@ async function loadPackageLibrary() {
     renderPackageLibrary();
 }
 
+async function loadServiceTemplates() {
+    try {
+        const response = await fetch(`${API_BASE}/service_templates`, { credentials: "same-origin" });
+        if (!response.ok) {
+            let detail = `HTTP ${response.status}`;
+            try { detail = (await response.json()).detail || detail; } catch (_) {}
+            throw new Error(detail);
+        }
+        const data = await response.json();
+        if (!Array.isArray(data)) {
+            throw new Error("Unexpected service template response");
+        }
+        SERVICE_TEMPLATES = data;
+        renderServiceTemplates();
+    } catch (e) {
+        console.error("Failed to load service templates", e);
+        SERVICE_TEMPLATES = [];
+        renderServiceTemplates(e.message || "Failed to load service templates");
+    }
+}
+
 async function loadConfig() {
     try {
         const config = await fetch(`${API_BASE}/config/${NODE_ID}`).then(r => {
@@ -177,6 +199,42 @@ async function addDeploymentFromLibrary(packageId) {
     } catch (error) {
         console.error(error);
         Toast.error(error.message || 'Failed to add package from library');
+    }
+}
+
+async function addDeploymentsFromTemplate(templateId) {
+    if (!agentConfig) return;
+    try {
+        const response = await fetch(`${API_BASE}/service_templates/${templateId}/instantiate`, {
+            method: 'POST'
+        });
+        if (!response.ok) {
+            let detail = 'Failed to instantiate service template';
+            try { detail = (await response.json()).detail || detail; } catch (_) {}
+            throw new Error(detail);
+        }
+
+        const data = await response.json();
+        const deployments = Array.isArray(data.deployments) ? data.deployments : [];
+        if (!deployments.length) {
+            throw new Error('Template did not return any deployments');
+        }
+
+        for (const deployment of deployments) {
+            deployment.files = Array.isArray(deployment.files) ? deployment.files : [];
+            deployment.proxies = normalizeProxies(deployment);
+            deployment.log_paths = Array.isArray(deployment.log_paths) ? deployment.log_paths : [];
+            deployment.enabled = deployment.enabled !== false;
+            markDeploymentFilesDirty(deployment);
+            agentConfig.deployments.push(deployment);
+        }
+
+        renderSidebar();
+        selectView(`deployment-${deployments[0].id}`);
+        Toast.success(`Added ${deployments.length} deployments from ${data.template?.name || templateId}`);
+    } catch (error) {
+        console.error(error);
+        Toast.error(error.message || 'Failed to instantiate service template');
     }
 }
 
@@ -326,6 +384,35 @@ function renderPackageLibrary() {
             <div class="tree-actions" style="opacity:1;">
                 <button onclick="event.stopPropagation(); addDeploymentFromLibrary('${pkg.id}')" title="Use Package"><i data-lucide="plus"></i></button>
                 <button onclick="deleteLibraryPackage('${pkg.id}', event)" title="Delete Package"><i data-lucide="trash-2"></i></button>
+            </div>
+        </div>
+    `).join('');
+
+    lucide.createIcons();
+}
+
+function renderServiceTemplates(errorMessage = "") {
+    const tree = document.getElementById('service-template-list');
+    if (!tree) return;
+
+    if (errorMessage) {
+        tree.innerHTML = `<div class="tree-item" style="color:var(--danger); cursor:default;">${escapeHtml(errorMessage)}</div>`;
+        return;
+    }
+
+    if (!SERVICE_TEMPLATES.length) {
+        tree.innerHTML = `<div class="tree-item" style="color:var(--text-muted); cursor:default;">No service templates found</div>`;
+        return;
+    }
+
+    tree.innerHTML = SERVICE_TEMPLATES.map(tpl => `
+        <div class="tree-item level-1" title="${escapeHtml(tpl.description || '')}">
+            <i data-lucide="layers"></i>
+            <span>${escapeHtml(tpl.name || tpl.id)}</span>
+            <div class="tree-actions" style="opacity:1;">
+                <button onclick="event.stopPropagation(); addDeploymentsFromTemplate('${tpl.id}')" title="Use Template">
+                    <i data-lucide="plus"></i>
+                </button>
             </div>
         </div>
     `).join('');
@@ -602,7 +689,7 @@ function renderProxyEditor(deploymentId, proxy, index) {
                     <label>Name (unique)</label>
                     <input type="text" value="${escapeHtml(name)}"
                            onchange="updateProxy('${deploymentId}', ${index}, 'name', this.value)"
-                           placeholder="e.g. modbus or http">
+                           placeholder="e.g. modbus, http, or https">
                 </div>
                 <div class="form-group">
                     <label>Enabled</label>
@@ -618,7 +705,8 @@ function renderProxyEditor(deploymentId, proxy, index) {
                     <select onchange="updateProxy('${deploymentId}', ${index}, 'protocol', this.value)">
                         <option value="tcp" ${protocol === 'tcp' ? 'selected' : ''}>TCP (Generic)</option>
                         <option value="modbus" ${protocol === 'modbus' ? 'selected' : ''}>Modbus TCP</option>
-                        <option value="http" ${protocol === 'http' ? 'selected' : ''}>HTTP/HTTPS</option>
+                        <option value="http" ${protocol === 'http' ? 'selected' : ''}>HTTP</option>
+                        <option value="https" ${protocol === 'https' ? 'selected' : ''}>HTTPS (TLS termination)</option>
                         <option value="mqtt" ${protocol === 'mqtt' ? 'selected' : ''}>MQTT</option>
                         <option value="s7comm" ${protocol === 's7comm' ? 'selected' : ''}>S7 Communication</option>
                         <option value="dnp3" ${protocol === 'dnp3' ? 'selected' : ''}>DNP3</option>

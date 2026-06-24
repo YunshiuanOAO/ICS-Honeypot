@@ -485,7 +485,7 @@ class NodeAgent:
     @staticmethod
     def _build_proxy_log_message(protocol, req_parsed, resp_parsed, src_ip):
         """Build a human-readable log message from parsed proxy data"""
-        if protocol == "http":
+        if protocol in ("http", "https"):
             method = req_parsed.get("http.method", "")
             uri = req_parsed.get("http.uri", "")
             status = resp_parsed.get("http.status_code", "")
@@ -494,7 +494,7 @@ class NodeAgent:
                 if status:
                     msg += f" → {status}"
                 return msg
-            return f"HTTP request from {src_ip}"
+            return f"{protocol.upper()} request from {src_ip}"
 
         if protocol == "mqtt":
             pkt_type = req_parsed.get("mqtt.packet_type_name", "")

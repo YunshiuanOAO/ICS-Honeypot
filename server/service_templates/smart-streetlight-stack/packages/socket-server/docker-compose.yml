@@ -1,0 +1,24 @@
+services:
+  socket-server:
+    image: python:3.11-slim
+    container_name: streetlight-tcp-management
+    working_dir: /app
+    command: ["sh", "-c", "pip install --no-cache-dir pymongo && python -u socket_server.py"]
+    restart: unless-stopped
+    # model B：server 主動 dial gateway 的下行 port（不再 listen 15566）
+    # listen: 15567 (UP) / 15568 (BRIDGE，subscriber 連入)
+    ports:
+      - "${UPSTREAM_PORT:-15567}:15567"
+      - "${BRIDGE_PORT:-15568}:15568"
+    env_file:
+      - socket_server.env
+    volumes:
+      - .:/app
+    # 與 mongodb/docker-compose.yml 啟動的 mongo 透過外部 network 連線
+    networks:
+      - streetlight-vmb
+
+networks:
+  streetlight-vmb:
+    name: streetlight-vmb
+    external: true

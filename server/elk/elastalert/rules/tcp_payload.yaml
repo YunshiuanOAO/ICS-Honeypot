@@ -1,5 +1,9 @@
-# Generic TCP/custom payload sent to a honeypot service.
-name: TCP Payload Sent
+# Suspicious TCP/custom payload sent to a honeypot service.
+#
+# This is intentionally not "any payload". Normal short interaction packets are
+# still logged by the honeypot, but only larger payloads or command/exploit-like
+# content become ElastAlert alerts.
+name: TCP Suspicious Payload Sent
 type: any
 index: honeypot-*
 
@@ -8,13 +12,48 @@ filter:
       query_string:
         query: '(protocol:tcp OR protocol:custom)'
   - bool:
+      must_not:
+        - query_string:
+            query: >
+              (attacker_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR attacker_ip:"::1" OR
+              src_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR src_ip:"::1")
+  - bool:
       minimum_should_match: 1
       should:
         - range:
             request_size_bytes:
-              gt: 0
-        - wildcard:
-            request_data: "?*"
+              gte: 256
+        - wildcard: {request_data: "*cmd*"}
+        - wildcard: {request_data: "*CMD*"}
+        - wildcard: {request_data: "*exec*"}
+        - wildcard: {request_data: "*EXEC*"}
+        - wildcard: {request_data: "*bash*"}
+        - wildcard: {request_data: "*BASH*"}
+        - wildcard: {request_data: "*bin/sh*"}
+        - wildcard: {request_data: "*powershell*"}
+        - wildcard: {request_data: "*PowerShell*"}
+        - wildcard: {request_data: "*wget*"}
+        - wildcard: {request_data: "*curl*"}
+        - wildcard: {request_data: "*netcat*"}
+        - wildcard: {request_data: "*/etc/passwd*"}
+        - wildcard: {request_data: "*../*"}
+        - wildcard: {request_data: "*&&*"}
+        - wildcard: {request_data: "*;*"}
+        - wildcard: {request_data: "*|*"}
+        - wildcard: {request_data: "*636d64*"}
+        - wildcard: {request_data: "*65786563*"}
+        - wildcard: {request_data: "*62617368*"}
+        - wildcard: {request_data: "*2f62696e2f7368*"}
+        - wildcard: {request_data: "*706f7765727368656c6c*"}
+        - wildcard: {request_data: "*77676574*"}
+        - wildcard: {request_data: "*6375726c*"}
+        - wildcard: {request_data: "*2e2e2f*"}
 
 realert:
   minutes: 5
@@ -29,7 +68,7 @@ http_post_url: "${SERVER_INGEST_URL}"
 http_post_headers:
   X-Api-Key: "${API_KEY}"
 http_post_static_payload:
-  signature: "TCP/custom payload sent to honeypot service"
+  signature: "TCP/custom suspicious payload sent to honeypot service"
   signature_id: 7000601
   category: "Payload Delivery"
   severity: 2

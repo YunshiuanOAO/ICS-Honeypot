@@ -1,0 +1,1441 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>成大路燈智慧地圖</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --sidebar: #0f172a;
+            --sidebar-soft: #1e293b;
+            --bg: #f6f8fc;
+            --panel: #ffffff;
+            --line: #dfe6f1;
+            --text: #172033;
+            --muted: #64748b;
+            --blue: #2563eb;
+            --cyan: #0891b2;
+            --green: #16a34a;
+            --red: #ef4444;
+            --amber: #d97706;
+            --violet: #7c3aed;
+            --state-normal: #f97316;
+            --state-error: #ef4444;
+            --state-offline: #a78bfa;
+            --state-controller: #f97316;
+            --state-marker: #22c55e;
+            --state-gateway: #8b5cf6;
+        }
+        body {
+            font-family: "Microsoft JhengHei", "Segoe UI", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        button, input, select { font: inherit; }
+        button { cursor: pointer; }
+        .app-shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-columns: 280px minmax(0, 1fr);
+        }
+        .sidebar {
+            background: var(--sidebar);
+            color: #dbeafe;
+            padding: 18px 12px;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .brand {
+            display: grid;
+            grid-template-columns: 44px 1fr 42px;
+            gap: 10px;
+            align-items: center;
+            padding: 8px 8px 16px;
+        }
+        .brand-logo {
+            width: 38px;
+            height: 44px;
+            object-fit: contain;
+            background: #ffffff;
+            border-radius: 6px;
+            padding: 4px;
+        }
+        .brand-title {
+            min-width: 0;
+            line-height: 1.15;
+        }
+        .brand-title strong {
+            display: block;
+            color: #ffffff;
+            font-size: 20px;
+            letter-spacing: 0;
+            white-space: nowrap;
+        }
+        .brand-title span {
+            display: block;
+            color: #cbd5e1;
+            font-size: 11px;
+            margin-top: 3px;
+            white-space: nowrap;
+        }
+        .menu-button {
+            width: 42px;
+            height: 42px;
+            border: 1px solid rgba(255,255,255,.16);
+            border-radius: 10px;
+            color: #e2e8f0;
+            background: rgba(255,255,255,.08);
+            font-size: 20px;
+            line-height: 1;
+        }
+        .campus-photo {
+            height: 78px;
+            margin: 0 4px 18px;
+            border-radius: 8px;
+            background-image: url("/static/img/ncku-gate.jpg");
+            background-size: cover;
+            background-position: center;
+            border: 1px solid rgba(255,255,255,.14);
+        }
+        .nav-section { margin-top: 8px; }
+        .nav-item {
+            width: 100%;
+            height: 46px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 0 12px;
+            color: #cbd5e1;
+            border-radius: 10px;
+            border: 0;
+            background: transparent;
+            text-align: left;
+            font-weight: 700;
+        }
+        .nav-item.active { background: #293244; color: #ffffff; }
+        .nav-icon {
+            width: 20px;
+            height: 20px;
+            color: currentColor;
+            stroke-width: 2.3;
+            flex: 0 0 auto;
+        }
+        .mode-pill {
+            margin: 18px 4px 0;
+            padding: 12px;
+            border-radius: 8px;
+            background: rgba(255,255,255,.07);
+            color: #cbd5e1;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+        .mode-pill strong { color: #ffffff; }
+        .main {
+            min-width: 0;
+            background: var(--bg);
+        }
+        .topbar {
+            height: 64px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 0 22px;
+            position: sticky;
+            top: 0;
+            z-index: 600;
+        }
+        .search {
+            width: min(360px, 38vw);
+            height: 42px;
+            border: 1px solid var(--line);
+            background: #f8fafc;
+            border-radius: 10px;
+            padding: 0 14px;
+            color: var(--text);
+            outline: none;
+        }
+        .search:focus { border-color: #9db8ff; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+        .topbar-spacer { flex: 1; }
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 40px;
+            padding: 0 13px;
+            border-radius: 10px;
+            background: #ecfdf5;
+            color: #166534;
+            font-weight: 700;
+            border: 1px solid #bbf7d0;
+            white-space: nowrap;
+        }
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--red);
+        }
+        .status-dot.connected { background: var(--green); }
+        .logout {
+            height: 40px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 14px;
+            border-radius: 10px;
+            color: #ffffff;
+            background: #14b8a6;
+            text-decoration: none;
+            font-weight: 800;
+        }
+        .workspace {
+            padding: 18px 20px 28px;
+        }
+        .page-view { display: none; }
+        .page-view.active { display: block; }
+        .home-hero {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 22px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+            margin-bottom: 16px;
+        }
+        .home-hero h1 {
+            font-size: 26px;
+            line-height: 1.2;
+            color: #0f172a;
+            margin-bottom: 6px;
+        }
+        .home-hero p {
+            color: var(--muted);
+            font-size: 14px;
+        }
+        .home-dashboard {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(150px, 1fr));
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+        .home-stat {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+            min-height: 122px;
+        }
+        .home-stat span {
+            display: block;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 800;
+            margin-bottom: 14px;
+        }
+        .home-stat strong {
+            display: block;
+            color: #0f172a;
+            font-size: 34px;
+            line-height: 1;
+        }
+        .home-stat.ok { border-top: 4px solid var(--state-normal); }
+        .home-stat.err { border-top: 4px solid var(--state-error); }
+        .home-stat.offline { border-top: 4px solid var(--state-offline); }
+        .home-stat.controller { border-top: 4px solid var(--state-controller); }
+        .home-stat.marker { border-top: 4px solid var(--state-marker); }
+        .home-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+            gap: 16px;
+        }
+        .home-panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+            min-width: 0;
+        }
+        .home-panel h2 {
+            font-size: 17px;
+            color: #0f172a;
+            margin-bottom: 12px;
+        }
+        .summary-list {
+            display: grid;
+            gap: 10px;
+        }
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 0;
+            border-top: 1px solid var(--line);
+            color: #334155;
+            font-weight: 700;
+        }
+        .summary-row:first-child { border-top: 0; }
+        .summary-row b { color: #0f172a; }
+        .toolbar-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 14px;
+            margin-bottom: 12px;
+        }
+        .stat-strip {
+            min-width: 0;
+            display: flex;
+            gap: 10px;
+            overflow-x: auto;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 10px;
+        }
+        .stat {
+            height: 42px;
+            padding: 0 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            white-space: nowrap;
+            font-weight: 800;
+            color: #334155;
+            background: #ffffff;
+        }
+        .stat b {
+            min-width: 26px;
+            height: 24px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: #eef2f7;
+            color: #111827;
+            font-size: 13px;
+        }
+        .stat-mark {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            background: var(--blue);
+        }
+        .stat-mark.offline-outline {
+            background: #ffffff !important;
+            border: 2px solid var(--state-controller);
+        }
+        .view-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #eaf2ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 999px;
+            padding: 4px;
+        }
+        .switch-btn {
+            height: 42px;
+            border-radius: 999px;
+            border: 0;
+            padding: 0 20px;
+            background: transparent;
+            color: #2563eb;
+            font-weight: 900;
+        }
+        .switch-btn.active { background: #ffffff; box-shadow: 0 2px 10px rgba(37,99,235,.18); }
+        .map-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 330px;
+            gap: 16px;
+            align-items: stretch;
+        }
+        .map-card, .side-panel, .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+        }
+        .map-card { padding: 16px; min-width: 0; }
+        .map-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .map-title { min-width: 0; flex: 1; }
+        .map-title h1 {
+            font-size: 21px;
+            line-height: 1.2;
+            color: #0f172a;
+        }
+        .map-title p {
+            color: var(--muted);
+            margin-top: 3px;
+            font-size: 13px;
+        }
+        .filter-select {
+            height: 40px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #ffffff;
+            color: #334155;
+            padding: 0 10px;
+            font-weight: 700;
+        }
+        #map {
+            height: calc(100vh - 230px);
+            min-height: 560px;
+            border-radius: 10px;
+            border: 1px solid #cbd5e1;
+            background: #dbeafe;
+            overflow: hidden;
+        }
+        .leaflet-control-attribution { font-size: 10px; }
+        .leaflet-popup-content { margin: 12px; min-width: 190px; }
+        .map-popup strong { color: #0f172a; }
+        .map-popup div { margin-top: 4px; color: #475569; font-size: 12px; }
+        .lamp-marker {
+            width: 18px;
+            height: 18px;
+            border-radius: 999px;
+            background: var(--state-normal);
+            border: 2px solid #ffffff;
+            box-shadow: 0 1px 6px rgba(0,0,0,.45);
+        }
+        .lamp-marker.runtime { background: var(--state-normal); }
+        .lamp-marker.offline {
+            background: #ffffff;
+            border: 3px solid var(--state-controller);
+            box-shadow: 0 1px 6px rgba(0,0,0,.45);
+        }
+        .lamp-marker.multi { background: var(--state-normal); }
+        .lamp-marker.multi.offline { background: #ffffff; }
+        .gateway-marker {
+            position: relative;
+            width: 22px;
+            height: 22px;
+            border-radius: 6px;
+            background: var(--state-gateway);
+            border: 2px solid #ffffff;
+            box-shadow: 0 2px 8px rgba(0,0,0,.45);
+            transform: rotate(45deg);
+        }
+        .gateway-marker::after {
+            content: "";
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: #ffffff;
+            left: 6px;
+            top: 6px;
+        }
+        .side-panel {
+            padding: 16px;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .side-panel h2 {
+            font-size: 18px;
+            line-height: 1.25;
+            color: #0f172a;
+        }
+        .node-meta {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.55;
+            word-break: break-word;
+        }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .metric {
+            border: 1px solid var(--line);
+            background: #f8fafc;
+            border-radius: 10px;
+            padding: 10px;
+            min-width: 0;
+        }
+        .metric span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        .metric strong {
+            color: #0f172a;
+            font-size: 17px;
+            word-break: break-word;
+        }
+        .control-box {
+            border-top: 1px solid var(--line);
+            padding-top: 14px;
+        }
+        .control-row {
+            display: grid;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .control-row label {
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 800;
+        }
+        .mac-select, .hex-input {
+            width: 100%;
+            height: 40px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #ffffff;
+            color: #0f172a;
+            padding: 0 10px;
+            outline: none;
+            font-family: "Courier New", monospace;
+            font-size: 13px;
+        }
+        .cmd-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+        .cmd-btn {
+            height: 42px;
+            border: 0;
+            border-radius: 10px;
+            color: #ffffff;
+            font-weight: 900;
+        }
+        .cmd-btn:disabled { cursor: not-allowed; opacity: .45; }
+        .btn-spw { background: var(--red); }
+        .btn-sgw { background: var(--blue); }
+        .btn-sra { background: var(--violet); }
+        .send-custom {
+            height: 40px;
+            border: 0;
+            border-radius: 10px;
+            background: #0f172a;
+            color: #ffffff;
+            font-weight: 900;
+        }
+        .hint {
+            min-height: 18px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .data-grid {
+            margin-top: 16px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 16px;
+        }
+        .panel { padding: 16px; min-width: 0; }
+        .live-log-panel { grid-column: 1 / -1; }
+        .panel h2 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #0f172a;
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+        .panel h2 .db-meta {
+            margin-left: auto;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .db-meta.err { color: var(--red); }
+        .log-area {
+            height: 320px;
+            overflow-y: auto;
+            display: block;
+            background: #f8fafc;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 12px;
+        }
+        .log-entry {
+            position: relative;
+            padding: 12px 14px 12px 16px;
+            min-height: 72px;
+            margin-bottom: 10px;
+            border-radius: 10px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+            overflow: hidden;
+        }
+        .log-entry:last-child { margin-bottom: 0; }
+        .log-entry::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 4px;
+            background: #3b82f6;
+        }
+        .log-resp::before { background: #f97316; }
+        .log-report::before { background: #22c55e; }
+        .log-head {
+            display: grid;
+            grid-template-columns: 64px minmax(0, 1fr) 92px;
+            gap: 8px;
+            align-items: start;
+        }
+        .log-badge {
+            height: 24px;
+            padding: 0 9px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 900;
+            color: #1d4ed8;
+            background: #dbeafe;
+            white-space: nowrap;
+        }
+        .log-resp .log-badge {
+            color: #c2410c;
+            background: #ffedd5;
+        }
+        .log-report .log-badge {
+            color: #15803d;
+            background: #dcfce7;
+        }
+        .log-command {
+            min-width: 0;
+            color: #0f172a;
+            font-size: 13px;
+            font-weight: 900;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+        }
+        .log-time {
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+            text-align: right;
+        }
+        .log-meta {
+            margin-top: 8px;
+            display: grid;
+            grid-template-columns: 132px minmax(0, 1fr);
+            align-items: start;
+            gap: 8px;
+            min-width: 0;
+            color: #475569;
+            font-size: 12px;
+        }
+        .log-mac {
+            min-width: 0;
+            padding: 3px 7px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #3730a3;
+            font-family: "Courier New", monospace;
+            font-weight: 800;
+            text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .log-hex {
+            min-width: 0;
+            color: #334155;
+            font-family: "Courier New", monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            line-height: 1.6;
+        }
+        .log-empty {
+            min-height: 260px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #94a3b8;
+            font-weight: 800;
+        }
+        .clear-btn {
+            margin-left: auto;
+            height: 32px;
+            padding: 0 11px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            color: #334155;
+            background: #ffffff;
+            font-size: 12px;
+            font-weight: 800;
+        }
+        .db-table-wrap {
+            max-height: 280px;
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+        }
+        table.db-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: "Courier New", monospace;
+            font-size: 12px;
+        }
+        table.db-table th, table.db-table td {
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--line);
+            white-space: nowrap;
+        }
+        table.db-table th {
+            background: #f1f5f9;
+            color: #334155;
+            font-weight: 900;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        table.db-table td.hex { color: var(--amber); word-break: break-all; white-space: normal; }
+        table.db-table td.dest-server { color: var(--green); }
+        table.db-table td.dest-gateway { color: var(--blue); }
+        .db-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 12px; }
+        @media (max-width: 1180px) {
+            .app-shell { grid-template-columns: 84px minmax(0, 1fr); }
+            .brand { grid-template-columns: 1fr; justify-items: center; }
+            .brand-title, .menu-button, .campus-photo, .nav-label, .mode-pill { display: none; }
+            .nav-item { justify-content: center; padding: 0; }
+            .map-layout, .data-grid, .home-grid { grid-template-columns: 1fr; }
+            .home-dashboard { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .log-head { grid-template-columns: 58px minmax(0, 1fr); }
+            .log-time {
+                grid-column: 2;
+                text-align: left;
+            }
+            .log-meta { grid-template-columns: 1fr; }
+            .log-mac {
+                width: max-content;
+                max-width: 100%;
+            }
+            #map { height: 560px; }
+        }
+        @media (max-width: 760px) {
+            .app-shell { grid-template-columns: 1fr; }
+            .sidebar { position: static; height: auto; display: none; }
+            .topbar { padding: 0 12px; }
+            .search { width: 44vw; }
+            .workspace { padding: 12px; }
+            .toolbar-row { grid-template-columns: 1fr; }
+            .home-dashboard { grid-template-columns: 1fr; }
+            #map { height: 520px; min-height: 420px; }
+            .data-grid { grid-template-columns: 1fr; }
+            .log-area { height: 360px; }
+            .status-chip { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <img class="brand-logo" src="/static/img/ncku-logo.png" alt="NCKU">
+                <div class="brand-title">
+                    <strong>國立成功大學</strong>
+                    <span>National Cheng Kung University</span>
+                </div>
+                <button class="menu-button" type="button" aria-label="選單">☰</button>
+            </div>
+            <div class="campus-photo" aria-hidden="true"></div>
+            <div class="nav-section">
+                <button class="nav-item active" type="button" data-page="home"><i class="nav-icon" data-lucide="layout-dashboard"></i><span class="nav-label">主頁</span></button>
+                <button class="nav-item" type="button" data-page="control"><i class="nav-icon" data-lucide="lightbulb"></i><span class="nav-label">路燈控制</span></button>
+            </div>
+            <div class="mode-pill">
+                成大校區路燈系統<br>
+                使用者 <strong>{{ username }}</strong>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <input class="search" id="mapSearch" type="search" placeholder="搜尋 MAC、校區、座標">
+                <div class="topbar-spacer"></div>
+                <div class="status-chip"><span class="status-dot" id="statusDot"></span><span id="statusText">連線中</span></div>
+                <a class="logout" href="/logout">登出</a>
+            </header>
+
+            <div class="workspace">
+                <section class="page-view active" id="pageHome">
+                    <div class="home-hero">
+                        <h1>成大校區路燈主頁</h1>
+                        <p>目前假路燈資料狀態與地圖匯出資料同步顯示。</p>
+                    </div>
+                    <div class="home-dashboard">
+                        <div class="home-stat ok"><span>控制器正常</span><strong id="homeStatNormal">0</strong></div>
+                        <div class="home-stat err"><span>控制器異常</span><strong id="homeStatError">0</strong></div>
+                        <div class="home-stat offline"><span>控制器離線</span><strong id="homeStatOffline">0</strong></div>
+                        <div class="home-stat controller"><span>控制器回報</span><strong id="homeStatRuntime">0</strong></div>
+                        <div class="home-stat marker"><span>地圖標點</span><strong id="homeStatMarkers">0</strong></div>
+                    </div>
+                    <div class="home-grid">
+                        <div class="home-panel">
+                            <h2>系統狀態</h2>
+                            <div class="summary-list">
+                                <div class="summary-row"><span>可控制 MAC</span><b id="homeControllableMacs">0</b></div>
+                                <div class="summary-row"><span>總路燈數</span><b id="homeDeviceTotal">0</b></div>
+                                <div class="summary-row"><span>閘道器</span><b id="homeGatewayTotal">0</b></div>
+                                <div class="summary-row"><span>資料匯出時間</span><b id="homeExportedAt">-</b></div>
+                                <div class="summary-row"><span>目前登入使用者</span><b>{{ username }}</b></div>
+                            </div>
+                        </div>
+                        <div class="home-panel">
+                            <h2>路燈控制入口</h2>
+                            <div class="summary-list">
+                                <div class="summary-row"><span>SPW 單盞控</span><b>可用</b></div>
+                                <div class="summary-row"><span>SGW 群控</span><b>可用</b></div>
+                                <div class="summary-row"><span>SRA 立即回報</span><b>可用</b></div>
+                                <div class="summary-row"><span>訊息紀錄</span><b>即時更新</b></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="page-view" id="pageControl">
+                    <div class="toolbar-row">
+                        <div class="stat-strip">
+                            <div class="stat"><span class="stat-mark" style="background:var(--state-normal)"></span>控制器正常 <b id="statNormal">0</b></div>
+                            <div class="stat"><span class="stat-mark" style="background:var(--state-error)"></span>控制器異常 <b id="statError">0</b></div>
+                            <div class="stat"><span class="stat-mark offline-outline"></span>控制器離線 <b id="statOffline">0</b></div>
+                            <div class="stat"><span class="stat-mark" style="background:var(--state-controller)"></span>控制器回報 <b id="statRuntime">0</b></div>
+                            <div class="stat"><span class="stat-mark" style="background:var(--state-marker)"></span>地圖標點 <b id="statMarkers">0</b></div>
+                            <div class="stat"><span class="stat-mark" style="background:var(--state-gateway)"></span>閘道器 <b id="statGateways">0</b></div>
+                        </div>
+                        <div class="view-switch">
+                            <button class="switch-btn" id="lightLayerBtn" type="button">街道圖</button>
+                            <button class="switch-btn active" id="darkLayerBtn" type="button">深色</button>
+                        </div>
+                    </div>
+
+                    <section class="map-layout">
+                        <div class="map-card">
+                            <div class="map-header">
+                                <div class="map-title">
+                                    <h1>成大校區路燈地圖</h1>
+                                    <p id="mapSubtitle">載入中</p>
+                                </div>
+                                <select class="filter-select" id="campusFilter">
+                                    <option value="">校區篩選</option>
+                                </select>
+                            </div>
+                            <div id="map"></div>
+                        </div>
+
+                        <aside class="side-panel">
+                            <div>
+                                <h2 id="nodeTitle">尚未選取節點</h2>
+                                <div class="node-meta" id="nodeMeta">點選地圖上的路燈標點後，這裡會顯示該節點的即時資料。</div>
+                            </div>
+                            <div class="metric-grid">
+                                <div class="metric"><span>功耗</span><strong id="metricPower">-</strong></div>
+                                <div class="metric"><span>亮度</span><strong id="metricBrightness">-</strong></div>
+                                <div class="metric"><span>電壓</span><strong id="metricVoltage">-</strong></div>
+                                <div class="metric"><span>RSSI</span><strong id="metricRssi">-</strong></div>
+                            </div>
+                            <div class="control-box">
+                                <div class="control-row">
+                                    <label for="macSelect">控制 MAC</label>
+                                    <select class="mac-select" id="macSelect"></select>
+                                    <div class="hint" id="nodeHint"></div>
+                                </div>
+                                <div class="cmd-grid">
+                                    <button class="cmd-btn btn-spw" id="btnSpw" type="button" onclick="sendSelectedCmd('SPW')">SPW 單盞控</button>
+                                    <button class="cmd-btn btn-sgw" id="btnSgw" type="button" onclick="sendSelectedCmd('SGW')">SGW 群控</button>
+                                    <button class="cmd-btn btn-sra" id="btnSra" type="button" onclick="sendSelectedCmd('SRA')">SRA 立即回報</button>
+                                </div>
+                            </div>
+                            <div class="control-box">
+                                <div class="control-row">
+                                    <label for="customHex">自訂 Hex 指令</label>
+                                    <input class="hex-input" type="text" id="customHex" placeholder="020B523C610553B801323F">
+                                    <button class="send-custom" type="button" onclick="sendCustom()">發送</button>
+                                    <div class="hint" id="customHint"></div>
+                                </div>
+                            </div>
+                        </aside>
+                    </section>
+
+                    <section class="data-grid">
+                        <div class="panel live-log-panel">
+                            <h2>訊息紀錄 <button class="clear-btn" type="button" onclick="clearLog()">清除記錄</button></h2>
+                            <div class="log-area" id="logArea"></div>
+                        </div>
+                        <div class="panel">
+                            <h2>路燈即時狀態 <span class="db-meta" id="runtimeMeta">載入中</span></h2>
+                            <div class="db-table-wrap">
+                                <table class="db-table">
+                                    <thead><tr><th>MAC</th><th>最後指令</th><th>更新時間</th><th>最後 Hex</th></tr></thead>
+                                    <tbody id="runtimeBody"></tbody>
+                                </table>
+                                <div class="db-empty" id="runtimeEmpty" style="display:none;">尚無資料</div>
+                            </div>
+                        </div>
+                        <div class="panel" style="grid-column:1 / -1;">
+                            <h2>歷史指令紀錄 <span class="db-meta" id="logsMeta">載入中</span></h2>
+                            <div class="db-table-wrap">
+                                <table class="db-table">
+                                    <thead><tr><th>時間</th><th>目的地</th><th>MAC</th><th>Hex</th></tr></thead>
+                                    <tbody id="logsBody"></tbody>
+                                </table>
+                                <div class="db-empty" id="logsEmpty" style="display:none;">尚無資料</div>
+                            </div>
+                        </div>
+                    </section>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const MAP_DATA = {{ map_payload|tojson }};
+        const COMMANDS = {{ commands|tojson }};
+        const CONTROL_MACS = Object.keys(COMMANDS);
+        const GATEWAYS = [
+            { id: 'GW-NCKU-01', name: '成功校區閘道器 1', lat: 22.99705, lon: 120.21968 },
+            { id: 'GW-NCKU-02', name: '成功校區閘道器 2', lat: 22.99908, lon: 120.22218 },
+        ];
+        const logArea = document.getElementById('logArea');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const markerLayer = L.layerGroup();
+        let map;
+        let markers = [];
+        let selectedDevice = null;
+        let selectedMarker = null;
+        let _connectFailCount = 0;
+
+        const socket = io({
+            path: '/socket.io',
+            transports: ['polling'],
+            upgrade: false,
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1500,
+            timeout: 20000,
+        });
+
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        function valueOrDash(value, suffix) {
+            if (value === null || value === undefined || value === '') return '-';
+            return `${value}${suffix || ''}`;
+        }
+
+        function showPage(page) {
+            const target = page === 'control' ? 'control' : 'home';
+            for (const btn of document.querySelectorAll('.nav-item[data-page]')) {
+                btn.classList.toggle('active', btn.dataset.page === target);
+            }
+            document.getElementById('pageHome').classList.toggle('active', target === 'home');
+            document.getElementById('pageControl').classList.toggle('active', target === 'control');
+            if (target === 'control' && map) {
+                setTimeout(() => map.invalidateSize(), 80);
+            }
+        }
+
+        function initNavigation() {
+            if (window.lucide) lucide.createIcons();
+            for (const btn of document.querySelectorAll('.nav-item[data-page]')) {
+                btn.addEventListener('click', () => showPage(btn.dataset.page));
+            }
+        }
+
+        function setStatusConnected(label) {
+            statusDot.classList.add('connected');
+            statusText.textContent = label || '已連線';
+        }
+
+        socket.on('connect', () => {
+            _connectFailCount = 0;
+            setStatusConnected('已連線');
+        });
+
+        socket.on('connect_error', (err) => {
+            _connectFailCount += 1;
+            statusDot.classList.remove('connected');
+            statusText.textContent = _connectFailCount >= 8 ? '連線失敗' : `重試中 ${_connectFailCount}`;
+            console.warn('[Socket.IO] connect_error', err);
+        });
+
+        socket.on('disconnect', () => {
+            statusDot.classList.remove('connected');
+            statusText.textContent = '已斷線';
+        });
+
+        socket.on('mqtt_message', (data) => {
+            if (!statusDot.classList.contains('connected')) setStatusConnected('已連線');
+            addLog(data);
+        });
+
+        function initMacSelect() {
+            const select = document.getElementById('macSelect');
+            select.innerHTML = '';
+            if (!CONTROL_MACS.length) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '無可控制 MAC';
+                select.appendChild(opt);
+                return;
+            }
+            for (const mac of CONTROL_MACS) {
+                const opt = document.createElement('option');
+                opt.value = mac;
+                opt.textContent = mac;
+                select.appendChild(opt);
+            }
+            select.addEventListener('change', updateCommandState);
+        }
+
+        function initMap() {
+            map = L.map('map', { zoomControl: true }).setView([22.9978, 120.2203], 17);
+            const lightLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 20,
+                attribution: '&copy; OpenStreetMap'
+            });
+            const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                maxZoom: 20,
+                attribution: '&copy; OpenStreetMap &copy; CARTO'
+            });
+            darkLayer.addTo(map);
+            markerLayer.addTo(map);
+
+            document.getElementById('lightLayerBtn').addEventListener('click', () => {
+                map.removeLayer(darkLayer);
+                lightLayer.addTo(map);
+                document.getElementById('lightLayerBtn').classList.add('active');
+                document.getElementById('darkLayerBtn').classList.remove('active');
+            });
+            document.getElementById('darkLayerBtn').addEventListener('click', () => {
+                map.removeLayer(lightLayer);
+                darkLayer.addTo(map);
+                document.getElementById('darkLayerBtn').classList.add('active');
+                document.getElementById('lightLayerBtn').classList.remove('active');
+            });
+
+            renderCampusOptions();
+            renderMarkers();
+            document.getElementById('campusFilter').addEventListener('change', renderMarkers);
+            document.getElementById('mapSearch').addEventListener('input', renderMarkers);
+        }
+
+        function markerDevices(marker) {
+            return Array.isArray(marker.devices) ? marker.devices : [];
+        }
+
+        function deviceSite(device) {
+            return device.site || device.campus || '成大校區';
+        }
+
+        function renderCampusOptions() {
+            const campuses = new Set();
+            for (const marker of (MAP_DATA.markers || [])) {
+                for (const device of markerDevices(marker)) campuses.add(deviceSite(device));
+            }
+            const filter = document.getElementById('campusFilter');
+            for (const campus of Array.from(campuses).sort()) {
+                const opt = document.createElement('option');
+                opt.value = campus;
+                opt.textContent = campus;
+                filter.appendChild(opt);
+            }
+        }
+
+        function allDevices() {
+            return (MAP_DATA.markers || []).flatMap((marker) => markerDevices(marker));
+        }
+
+        function numericValue(value) {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        function isDeviceOffline(device) {
+            return numericValue(device.power_consumption) === 0
+                && numericValue(device.brightness) === 0
+                && numericValue(device.voltage) === 0
+                && numericValue(device.rssi) === 0;
+        }
+
+        function markerIsOffline(devices) {
+            return devices.length > 0 && devices.every(isDeviceOffline);
+        }
+
+        function setCount(id, value) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        }
+
+        function updateDashboardStats() {
+            const devices = allDevices();
+            const offlineCount = devices.filter(isDeviceOffline).length;
+            const normalCount = devices.length - offlineCount;
+            const errorCount = 0;
+            const controllerCount = normalCount;
+            const markerCount = (MAP_DATA.markers || []).length;
+            for (const [prefix, value] of [
+                ['Normal', normalCount],
+                ['Error', errorCount],
+                ['Offline', offlineCount],
+                ['Runtime', controllerCount],
+                ['Markers', markerCount],
+            ]) {
+                setCount(`stat${prefix}`, value);
+                setCount(`homeStat${prefix}`, value);
+            }
+            setCount('homeDeviceTotal', devices.length);
+            setCount('homeControllableMacs', CONTROL_MACS.length);
+            setCount('homeGatewayTotal', GATEWAYS.length);
+            setCount('statGateways', GATEWAYS.length);
+            setCount('homeExportedAt', MAP_DATA.exported_at || '-');
+        }
+
+        function markerMatches(marker, campus, query) {
+            const devices = markerDevices(marker);
+            if (campus && !devices.some((d) => deviceSite(d) === campus)) return false;
+            if (!query) return true;
+            const haystack = [
+                marker.marker_key, marker.lat, marker.lon,
+                ...devices.flatMap((d) => [d.mac, d.site, d.protocol, d.map_source, d.last_seen])
+            ].join(' ').toLowerCase();
+            return haystack.includes(query);
+        }
+
+        function gatewayMatches(gateway, query) {
+            if (!query) return true;
+            return [gateway.id, gateway.name, gateway.lat, gateway.lon, 'gateway', '閘道器']
+                .join(' ')
+                .toLowerCase()
+                .includes(query);
+        }
+
+        function renderMarkers() {
+            markerLayer.clearLayers();
+            markers = [];
+            const campus = document.getElementById('campusFilter').value;
+            const query = document.getElementById('mapSearch').value.trim().toLowerCase();
+            const bounds = [];
+            let filteredCount = 0;
+
+            for (const marker of (MAP_DATA.markers || [])) {
+                if (!markerMatches(marker, campus, query)) continue;
+                filteredCount += 1;
+                const devices = markerDevices(marker);
+                const isOffline = markerIsOffline(devices);
+                const isMulti = devices.length > 1;
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div class="lamp-marker ${isOffline ? 'offline' : 'runtime'} ${isMulti ? 'multi' : ''}"></div>`,
+                    iconSize: [18, 18],
+                    iconAnchor: [9, 9],
+                });
+                const leafletMarker = L.marker([marker.lat, marker.lon], { icon }).addTo(markerLayer);
+                leafletMarker.bindPopup(popupHtml(marker));
+                leafletMarker.on('click', () => selectMarker(marker, devices[0] || {}, leafletMarker));
+                leafletMarker._streetlightMarker = marker;
+                markers.push(leafletMarker);
+                bounds.push([marker.lat, marker.lon]);
+            }
+            renderGateways(query, bounds);
+
+            if (bounds.length) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 18 });
+            updateDashboardStats();
+            document.getElementById('mapSubtitle').textContent =
+                `${filteredCount} / ${(MAP_DATA.markers || []).length} 個控制器標點 · ${GATEWAYS.length} 個閘道器 · ${allDevices().length} 盞路燈 · 匯出 ${MAP_DATA.exported_at || '-'}`;
+        }
+
+        function renderGateways(query, bounds) {
+            for (const gateway of GATEWAYS) {
+                if (!gatewayMatches(gateway, query)) continue;
+                const icon = L.divIcon({
+                    className: '',
+                    html: '<div class="gateway-marker"></div>',
+                    iconSize: [22, 22],
+                    iconAnchor: [11, 11],
+                });
+                const leafletMarker = L.marker([gateway.lat, gateway.lon], { icon }).addTo(markerLayer);
+                leafletMarker.bindPopup(gatewayPopupHtml(gateway));
+                leafletMarker.on('click', () => selectGateway(gateway, leafletMarker));
+                markers.push(leafletMarker);
+                bounds.push([gateway.lat, gateway.lon]);
+            }
+        }
+
+        function popupHtml(marker) {
+            const devices = markerDevices(marker);
+            const first = devices[0] || {};
+            return `<div class="map-popup">
+                <strong>${escapeHtml(deviceSite(first))}</strong>
+                <div>標點 ${escapeHtml(marker.marker_key)}</div>
+                <div>路燈 ${escapeHtml(marker.device_count || devices.length)} 盞</div>
+                <div>座標 ${escapeHtml(marker.lat)}, ${escapeHtml(marker.lon)}</div>
+            </div>`;
+        }
+
+        function gatewayPopupHtml(gateway) {
+            return `<div class="map-popup">
+                <strong>${escapeHtml(gateway.name)}</strong>
+                <div>ID ${escapeHtml(gateway.id)}</div>
+                <div>類型 閘道器</div>
+                <div>座標 ${escapeHtml(gateway.lat)}, ${escapeHtml(gateway.lon)}</div>
+            </div>`;
+        }
+
+        function selectMarker(marker, device, leafletMarker) {
+            selectedMarker = marker;
+            selectedDevice = device || {};
+            const mac = selectedDevice.mac || '';
+            document.getElementById('nodeTitle').textContent = `${deviceSite(selectedDevice)} · ${marker.device_count || markerDevices(marker).length} 盞`;
+            document.getElementById('nodeMeta').innerHTML = [
+                `座標: ${escapeHtml(marker.lat)}, ${escapeHtml(marker.lon)}`,
+                `MAC: ${escapeHtml(mac || '此匯出節點未提供 MAC')}`,
+                `最後回報: ${escapeHtml(selectedDevice.last_seen || '-')}`
+            ].join('<br>');
+            document.getElementById('metricPower').textContent = valueOrDash(selectedDevice.power_consumption, ' W');
+            document.getElementById('metricBrightness').textContent = valueOrDash(selectedDevice.brightness, '%');
+            document.getElementById('metricVoltage').textContent = valueOrDash(selectedDevice.voltage, ' V');
+            document.getElementById('metricRssi').textContent = valueOrDash(selectedDevice.rssi, '');
+            const macSelect = document.getElementById('macSelect');
+            if (mac && COMMANDS[mac]) macSelect.value = mac;
+            updateCommandState();
+            if (leafletMarker) leafletMarker.openPopup();
+        }
+
+        function selectGateway(gateway, leafletMarker) {
+            selectedMarker = gateway;
+            selectedDevice = { node_type: 'gateway' };
+            document.getElementById('nodeTitle').textContent = gateway.name;
+            document.getElementById('nodeMeta').innerHTML = [
+                `ID: ${escapeHtml(gateway.id)}`,
+                `類型: 閘道器`,
+                `座標: ${escapeHtml(gateway.lat)}, ${escapeHtml(gateway.lon)}`,
+                `狀態: 在線`
+            ].join('<br>');
+            document.getElementById('metricPower').textContent = '-';
+            document.getElementById('metricBrightness').textContent = '-';
+            document.getElementById('metricVoltage').textContent = '-';
+            document.getElementById('metricRssi').textContent = '-';
+            document.getElementById('macSelect').value = '';
+            updateCommandState();
+            if (leafletMarker) leafletMarker.openPopup();
+        }
+
+        function updateCommandState() {
+            const selectedMac = document.getElementById('macSelect').value;
+            const hasCommands = Boolean(selectedMac && COMMANDS[selectedMac]);
+            document.getElementById('btnSpw').disabled = !hasCommands;
+            document.getElementById('btnSgw').disabled = !hasCommands;
+            document.getElementById('btnSra').disabled = !hasCommands;
+            const nodeMac = selectedDevice && selectedDevice.mac;
+            const hint = document.getElementById('nodeHint');
+            if (selectedDevice && selectedDevice.node_type === 'gateway') {
+                document.getElementById('btnSpw').disabled = false;
+                document.getElementById('btnSgw').disabled = false;
+                document.getElementById('btnSra').disabled = false;
+                hint.textContent = '';
+                hint.style.color = '#64748b';
+            } else if (!CONTROL_MACS.length) {
+                hint.textContent = '目前沒有可發送的命令表。';
+                hint.style.color = '#ef4444';
+            } else if (nodeMac && COMMANDS[nodeMac]) {
+                hint.textContent = `使用節點 MAC ${nodeMac}`;
+                hint.style.color = '#16a34a';
+            } else if (nodeMac && !COMMANDS[nodeMac]) {
+                hint.textContent = `節點 MAC ${nodeMac} 尚未在 command table 建立 SPW/SGW/SRA。`;
+                hint.style.color = '#d97706';
+            } else {
+                hint.textContent = '此地圖匯出節點未含 MAC，暫以選取的模擬 MAC 控制。';
+                hint.style.color = '#d97706';
+            }
+        }
+
+        function sendSelectedCmd(cmdType) {
+            if (selectedDevice && selectedDevice.node_type === 'gateway') return;
+            const mac = document.getElementById('macSelect').value;
+            sendCmd(mac, cmdType);
+            document.getElementById('nodeHint').textContent = `已送出 ${cmdType} -> ${mac}`;
+            document.getElementById('nodeHint').style.color = '#16a34a';
+        }
+
+        function sendCmd(mac, cmdType) {
+            if (!mac || !COMMANDS[mac] || !COMMANDS[mac][cmdType]) return;
+            socket.emit('send_command', { mac: mac, cmd_type: cmdType });
+        }
+
+        function setHint(msg, color) {
+            const hint = document.getElementById('customHint');
+            hint.textContent = msg;
+            hint.style.color = color || '#64748b';
+        }
+
+        function sendCustom() {
+            const input = document.getElementById('customHex');
+            const hex = input.value.trim();
+            if (!hex) {
+                setHint('請輸入 hex', '#ef4444');
+                return;
+            }
+            if (!/^[0-9a-fA-F]+$/.test(hex)) {
+                setHint('格式錯誤：只能包含 0-9 與 a-f', '#ef4444');
+                return;
+            }
+            if (hex.length % 2 !== 0) {
+                setHint('格式錯誤：hex 字元數必須為偶數', '#ef4444');
+                return;
+            }
+            if (!socket.connected) {
+                setHint('訊息連線尚未建立', '#ef4444');
+                return;
+            }
+            socket.emit('send_command', { mac: 'custom', cmd_type: 'CUSTOM', hex_data: hex });
+            setHint(`已送出 ${hex.toUpperCase()}`, '#16a34a');
+            input.value = '';
+        }
+
+        function addLog(data) {
+            const empty = logArea.querySelector('.log-empty');
+            if (empty) empty.remove();
+            const entry = document.createElement('div');
+            let cssClass = 'log-cmd';
+            let direction = '送出';
+            if (data.topic === 'streetlight/gateway_to_server') {
+                if (data.type === 'periodic_report') {
+                    cssClass = 'log-report';
+                    direction = '回報';
+                } else {
+                    cssClass = 'log-resp';
+                    direction = '回應';
+                }
+            }
+            entry.className = `log-entry ${cssClass}`;
+            const timestamp = data.timestamp || new Date().toLocaleTimeString();
+            const macText = data.mac ? escapeHtml(data.mac) : '群組 / 系統';
+            const hexText = escapeHtml(data.data || '');
+            entry.innerHTML = `
+                <div class="log-head">
+                    <span class="log-badge">${direction}</span>
+                    <strong class="log-command" title="${escapeHtml(data.command || '')}">${escapeHtml(data.command || '-')}</strong>
+                    <span class="log-time">${escapeHtml(timestamp)}</span>
+                </div>
+                <div class="log-meta">
+                    <span class="log-mac">${macText}</span>
+                    <span class="log-hex" title="${hexText}">${hexText}</span>
+                </div>
+            `;
+            logArea.prepend(entry);
+            while (logArea.children.length > 120) {
+                logArea.removeChild(logArea.lastElementChild);
+            }
+        }
+
+        function clearLog() {
+            logArea.innerHTML = '<div class="log-empty">尚無即時訊息</div>';
+        }
+
+        document.getElementById('customHex').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendCustom();
+        });
+
+        async function refreshRuntime() {
+            const meta = document.getElementById('runtimeMeta');
+            const body = document.getElementById('runtimeBody');
+            const empty = document.getElementById('runtimeEmpty');
+            try {
+                const r = await fetch('/api/runtime');
+                if (!r.ok) {
+                    meta.textContent = `MongoDB 未連線 (${r.status})`;
+                    meta.classList.add('err');
+                    return;
+                }
+                const j = await r.json();
+                meta.textContent = `${j.count} 筆 · ${new Date().toLocaleTimeString()}`;
+                meta.classList.remove('err');
+                body.innerHTML = '';
+                empty.style.display = (j.items && j.items.length) ? 'none' : 'block';
+                for (const it of (j.items || [])) {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${escapeHtml(it.mac)}</td>
+                        <td>${escapeHtml(it.last_command)}</td>
+                        <td>${escapeHtml(it.updated_at)}</td>
+                        <td class="hex">${escapeHtml(it.last_hex)}</td>`;
+                    body.appendChild(tr);
+                }
+            } catch (e) {
+                meta.textContent = `讀取失敗: ${e}`;
+                meta.classList.add('err');
+            }
+        }
+
+        async function refreshLogs() {
+            const meta = document.getElementById('logsMeta');
+            const body = document.getElementById('logsBody');
+            const empty = document.getElementById('logsEmpty');
+            try {
+                const r = await fetch('/api/command_logs?limit=50');
+                if (!r.ok) {
+                    meta.textContent = `MongoDB 未連線 (${r.status})`;
+                    meta.classList.add('err');
+                    return;
+                }
+                const j = await r.json();
+                meta.textContent = `${j.count} 筆 · ${new Date().toLocaleTimeString()}`;
+                meta.classList.remove('err');
+                body.innerHTML = '';
+                empty.style.display = (j.items && j.items.length) ? 'none' : 'block';
+                for (const it of (j.items || [])) {
+                    const dest = it.destination || (it.direction === 'up' ? 'server' : 'gateway');
+                    const destCls = dest === 'server' ? 'dest-server' : 'dest-gateway';
+                    const destLabel = dest === 'server' ? '↑ server' : '↓ gateway';
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${escapeHtml(it.ts)}</td>
+                        <td class="${destCls}">${destLabel}</td>
+                        <td>${escapeHtml(it.mac)}</td>
+                        <td class="hex">${escapeHtml(it.hex_data)}</td>`;
+                    body.appendChild(tr);
+                }
+            } catch (e) {
+                meta.textContent = `讀取失敗: ${e}`;
+                meta.classList.add('err');
+            }
+        }
+
+        initNavigation();
+        initMacSelect();
+        initMap();
+        showPage('home');
+        clearLog();
+        refreshRuntime();
+        refreshLogs();
+        setInterval(refreshRuntime, 5000);
+        setInterval(refreshLogs, 5000);
+    </script>
+</body>
+</html>

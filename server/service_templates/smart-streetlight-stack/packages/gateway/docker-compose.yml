@@ -1,0 +1,17 @@
+services:
+  gateway:
+    image: python:3.11-slim
+    container_name: streetlight-gateway
+    working_dir: /app
+    command: ["sh", "-c", "pip install --no-cache-dir paho-mqtt && python -u gateway.py"]
+    restart: unless-stopped
+    # 下行通道：gateway listen 等 server 主動 dial（model B：對等雙通道）
+    ports:
+      - "${GATEWAY_LISTEN_PORT:-15566}:15566"
+    env_file:
+      - gateway.env
+    environment:
+      - BROKER_PORT=${BROKER_PORT:-1883}
+    volumes:
+      - .:/app
+      - ${HONEYPOT_LOGS_DIR:-./logs}:/app/logs

@@ -205,8 +205,8 @@ function parseMetadata(metadata) {
 }
 
 function buildLogSummary(log, metadata) {
-    if (log.protocol === "http") {
-        return `${metadata["log.message"] || metadata["http.method"] || "HTTP request"}`;
+    if (log.protocol === "http" || log.protocol === "https") {
+        return `${metadata["log.message"] || metadata["http.method"] || `${String(log.protocol).toUpperCase()} request`}`;
     }
     if (log.protocol === "mqtt") {
         return `${metadata["log.message"] || metadata["mqtt.packet_type_name"] || metadata["mqtt.message"] || "MQTT event"}`;

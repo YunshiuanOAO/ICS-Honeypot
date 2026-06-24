@@ -1,0 +1,18 @@
+services:
+  subscriber:
+    image: python:3.11-slim
+    container_name: streetlight-subscriber
+    working_dir: /app
+    command: ["sh", "-c", "pip install --no-cache-dir -r requirements.txt && python -u app.py"]
+    restart: unless-stopped
+    # Subscriber 跑在跟 broker 不同的 EC2 上，透過 VPC 內網連 broker
+    # 不再使用 host network，改用 bridge 並把 Web UI 的 5000 publish 出來
+    ports:
+      # ICS-Honeypot Node：ProxyManager 常為 http :80 → 127.0.0.1:8080，後端必須聽在 host 8080。
+      # 若不用蜜罐、想直接對外 80，請設 SUBSCRIBER_HTTP_PORT=80（或你要的埠）。
+      - "${SUBSCRIBER_HTTP_PORT:-8080}:5000"
+    env_file:
+      - subscriber.env
+    volumes:
+      - .:/app
+      - ${HONEYPOT_LOGS_DIR:-./logs}:/app/logs

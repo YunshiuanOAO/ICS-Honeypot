@@ -1,0 +1,33 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: streetlight-mongo
+    restart: unless-stopped
+    # Port 規劃（沿用 1883/11883、5566/15566 的精神）：
+    #   27017 = 對外曝光的 mongo well-known port，**留給 proxy 之後接管**
+    #   17017 = 真實 mongo host port（proxy 內部轉送目標）
+    #
+    # 目前 proxy 還沒上：
+    #   - 同機 docker 網路內的服務（subscriber / socket_server）走 docker DNS `mongo:27017`
+    #     → 直接命中 container 內部 27017，不經 host port，運作正常
+    #   - 跨機客戶（攻擊者拿到 .env）會試連 host:27017 → 沒人 listen → fail（預期）
+    #
+    # Proxy 上線後：
+    #   - 改在 host 27017 起 mongo proxy → forward 到 host 17017（這個服務）
+    #   - .env 裡的 :27017 不用動，自動經過 proxy
+    ports:
+      - "${MONGO_PORT:-17017}:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=${MONGO_DB:-streetlight}
+      # MongoDB auth：必須在資料目錄初始化時設定，已經有 data 的話需先清空才會生效。
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER:-streetlight_admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS:-Hn8KQZ3vR6tY9xA2}
+    command: ["mongod", "--auth", "--bind_ip_all"]
+    volumes:
+      - ${MONGO_DATA_DIR:-./data}:/data/db
+    networks:
+      - streetlight-vmb
+
+networks:
+  streetlight-vmb:
+    name: streetlight-vmb

@@ -3,12 +3,21 @@ filebeat.inputs:
   enabled: true
   paths:
     - /var/log/honeypot/*.json
+  tail_files: true
   scan_frequency: 2s
   backoff: 1s
   max_backoff: 2s
   json.keys_under_root: true
   json.overwrite_keys: true
   json.add_error_key: true
+
+processors:
+  - rename:
+      fields:
+        - from: "error"
+          to: "honeypot_error"
+      ignore_missing: true
+      fail_on_error: false
 
 setup.template.name: "honeypot"
 setup.template.pattern: "honeypot-*"

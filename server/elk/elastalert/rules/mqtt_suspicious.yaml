@@ -1,5 +1,8 @@
-# MQTT suspicious usernames, subscriptions, publishes and topic enumeration.
-name: MQTT Suspicious Username Topic Publish Subscribe
+# MQTT command-like topic or large publish payload.
+#
+# Weak usernames and wildcard topic enumeration have their own rules. This rule
+# stays focused on command/control-style topics and unusually large payloads.
+name: MQTT Suspicious Command Topic Or Payload
 type: any
 index: honeypot-*
 
@@ -8,23 +11,33 @@ filter:
       query_string:
         query: 'protocol:mqtt'
   - bool:
+      must_not:
+        - query_string:
+            query: >
+              (attacker_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR attacker_ip:"::1" OR
+              src_ip:(127.* OR 10.* OR 169.254.* OR 192.168.* OR 0.* OR
+              172.16.* OR 172.17.* OR 172.18.* OR 172.19.* OR 172.20.* OR 172.21.* OR 172.22.* OR 172.23.* OR
+              172.24.* OR 172.25.* OR 172.26.* OR 172.27.* OR 172.28.* OR 172.29.* OR 172.30.* OR 172.31.* OR
+              localhost OR fc* OR fd*) OR src_ip:"::1")
+  - bool:
       minimum_should_match: 1
       should:
-        - query_string:
-            query: 'mqtt_username:(admin OR root OR test OR guest OR mqtt OR user OR default OR anonymous)'
-        - query_string:
-            query: 'mqtt_packet_type_name:(SUBSCRIBE OR PUBLISH OR UNSUBSCRIBE)'
-        - wildcard: {mqtt_topic: "#"}
-        - wildcard: {mqtt_topic: "+"}
-        - wildcard: {mqtt_topic: "$SYS*"}
+        - wildcard: {mqtt_topic: "*cmd*"}
+        - wildcard: {mqtt_topic: "*CMD*"}
+        - wildcard: {mqtt_topic: "*command*"}
+        - wildcard: {mqtt_topic: "*COMMAND*"}
+        - wildcard: {mqtt_topic: "*control*"}
+        - wildcard: {mqtt_topic: "*CONTROL*"}
+        - wildcard: {mqtt_topic: "*exec*"}
+        - wildcard: {mqtt_topic: "*EXEC*"}
         - wildcard: {mqtt_topic: "*admin*"}
         - wildcard: {mqtt_topic: "*root*"}
-        - wildcard: {mqtt_topic: "*test*"}
-        - wildcard: {mqtt_topic: "*cmd*"}
-        - wildcard: {mqtt_topic: "*command*"}
         - range:
             mqtt_payload_length:
-              gt: 0
+              gte: 256
 
 realert:
   minutes: 5
@@ -38,7 +51,7 @@ http_post_url: "${SERVER_INGEST_URL}"
 http_post_headers:
   X-Api-Key: "${API_KEY}"
 http_post_static_payload:
-  signature: "MQTT suspicious username/topic publish/subscribe"
+  signature: "MQTT suspicious command topic or large payload"
   signature_id: 7000401
   category: "MQTT Suspicious Activity"
   severity: 2

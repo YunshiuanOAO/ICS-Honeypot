@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>APS Honeypot Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css?v=30">
+    <link rel="stylesheet" href="/static/style.css?v=32">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -169,10 +169,14 @@
                                 <option value="168">Last 7 days</option>
                                 <option value="custom">Custom range…</option>
                             </select>
-                            <select id="ip-analysis-agent-filter" class="ip-analysis-select" title="Hide source IPs that match known agent IPs">
-                                <option value="hide" selected>Hide agent IPs</option>
-                                <option value="show">Show agent IPs</option>
-                            </select>
+                            <label class="ip-analysis-checkbox" title="Hide source IPs that match known agent IPs">
+                                <input id="ip-analysis-agent-filter" type="checkbox" checked>
+                                <span>Hide agent IPs</span>
+                            </label>
+                            <label class="ip-analysis-checkbox" title="Hide RFC1918, loopback, and link-local source IPs">
+                                <input id="ip-analysis-private-filter" type="checkbox" checked>
+                                <span>Hide private IPs</span>
+                            </label>
                             <div class="ip-analysis-custom" id="ip-analysis-custom" hidden>
                                 <label class="ip-range-field">
                                     <i data-lucide="calendar" class="ip-range-icon"></i>
@@ -271,7 +275,7 @@
     <script src="https://unpkg.com/topojson-client@3"></script>
     <script src="/static/attackmap.js?v=27"></script>
     <script src="/static/script.js?v=35"></script>
-    <script src="/static/analysis.js?v=19"></script>
+    <script src="/static/analysis.js?v=21"></script>
     <script>
         // Initialize Lucide icons
         lucide.createIcons();

@@ -616,6 +616,7 @@ async def get_profile(name: str):
 
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 PACKAGE_LIBRARY_DIR = os.path.join(UPLOADS_DIR, "library")
+SERVICE_TEMPLATES_DIR = os.path.join(BASE_DIR, "service_templates")
 
 
 def _safe_extract_zip(archive_path: str, extract_dir: str):
@@ -816,6 +817,116 @@ def _load_package_from_library(package_id: str):
     }
 
 
+def _read_package_dir(package_dir: str):
+    package_root = Path(package_dir).resolve()
+    if not package_root.exists() or not package_root.is_dir():
+        raise HTTPException(status_code=404, detail="Template package directory not found")
+
+    files = []
+    skip_dirs = {"__pycache__", ".git", "node_modules", "data", "logs", "db"}
+    for root, dirs, filenames in os.walk(package_root):
+        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
+        for filename in sorted(filenames):
+            if filename.startswith("._"):
+                continue
+            absolute_path = Path(root) / filename
+            relative_path = absolute_path.resolve().relative_to(package_root).as_posix()
+            files.append(_deployment_file_entry(relative_path, absolute_path.read_bytes()))
+    return files
+
+
+def _safe_template_id(template_id: str) -> str:
+    safe_id = os.path.basename(template_id or "")
+    if not safe_id or safe_id != template_id or ".." in template_id:
+        raise HTTPException(status_code=400, detail="Invalid template ID")
+    return safe_id
+
+
+def _load_service_template(template_id: str):
+    safe_id = _safe_template_id(template_id)
+    template_root = os.path.join(SERVICE_TEMPLATES_DIR, safe_id)
+    resolved_root = os.path.realpath(template_root)
+    if not resolved_root.startswith(os.path.realpath(SERVICE_TEMPLATES_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid template ID")
+
+    metadata_path = os.path.join(template_root, "template.json")
+    if not os.path.exists(metadata_path):
+        raise HTTPException(status_code=404, detail="Service template not found")
+
+    with open(metadata_path, "r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    metadata["_root"] = template_root
+    return metadata
+
+
+def _list_service_templates():
+    if not os.path.isdir(SERVICE_TEMPLATES_DIR):
+        return []
+
+    templates = []
+    for template_id in sorted(os.listdir(SERVICE_TEMPLATES_DIR)):
+        metadata_path = os.path.join(SERVICE_TEMPLATES_DIR, template_id, "template.json")
+        if not os.path.exists(metadata_path):
+            continue
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            templates.append({
+                "id": metadata.get("id") or template_id,
+                "name": metadata.get("name") or template_id,
+                "description": metadata.get("description") or "",
+                "category": metadata.get("category") or "custom",
+                "deployment_count": len(metadata.get("deployments") or []),
+            })
+        except Exception:
+            continue
+    return templates
+
+
+def _instantiate_service_template(template_id: str):
+    template = _load_service_template(template_id)
+    template_root = template.pop("_root")
+    suffix = uuid.uuid4().hex[:8]
+    now_ms = int(time.time() * 1000)
+    deployments = []
+
+    for index, item in enumerate(template.get("deployments") or []):
+        package_dir = item.get("package_dir")
+        if not package_dir:
+            raise HTTPException(status_code=400, detail=f"Template deployment {index} missing package_dir")
+        package_path = os.path.realpath(os.path.join(template_root, package_dir))
+        if not package_path.startswith(os.path.realpath(template_root)):
+            raise HTTPException(status_code=400, detail="Invalid template package path")
+
+        base_id = _slugify(item.get("id") or item.get("name") or f"deployment-{index + 1}", f"deployment-{index + 1}")
+        deployment_id = f"{base_id}-{suffix}"
+        deployment = {
+            "id": deployment_id,
+            "name": item.get("name") or base_id,
+            "template": item.get("template") or template.get("id") or template_id,
+            "enabled": item.get("enabled", True),
+            "source_dir": item.get("source_dir") or base_id,
+            "log_paths": item.get("log_paths") or [],
+            "proxies": item.get("proxies") or [],
+            "files": _read_package_dir(package_path),
+            "files_updated_at": now_ms,
+            "library_package_id": "",
+            "library_package_name": template.get("name") or template_id,
+        }
+        deployments.append(deployment)
+
+    return {
+        "status": "ok",
+        "template": {
+            "id": template.get("id") or template_id,
+            "name": template.get("name") or template_id,
+            "description": template.get("description") or "",
+            "category": template.get("category") or "custom",
+        },
+        "deployments": deployments,
+    }
+
+
 @app.post("/api/import_package_zip", dependencies=[Depends(require_session)])
 async def import_package_zip(archive: UploadFile = File(...)):
     filename = archive.filename or "package.zip"
@@ -948,6 +1059,16 @@ async def delete_package_library_item(package_id: str):
     return {"status": "deleted"}
 
 
+@app.get("/api/service_templates", dependencies=[Depends(require_session)])
+async def list_service_templates():
+    return _list_service_templates()
+
+
+@app.post("/api/service_templates/{template_id}/instantiate", dependencies=[Depends(require_session)])
+async def instantiate_service_template(template_id: str):
+    return _instantiate_service_template(template_id)
+
+
 # --- Web UI Endpoints ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -1066,6 +1187,7 @@ async def ip_analysis(
     page_size: int = 100,
     search: Optional[str] = None,
     hide_agent_ips: bool = False,
+    hide_private_ips: bool = False,
     hours: Optional[int] = None,
     from_ts: Optional[str] = None,
     to_ts: Optional[str] = None,
@@ -1096,6 +1218,7 @@ async def ip_analysis(
             until=until,
             ip_search=(search or "").strip() or None,
             exclude_ips=exclude_ips,
+            hide_private_ips=hide_private_ips,
         )
     except sqlite3.OperationalError as e:
         detail = str(e)

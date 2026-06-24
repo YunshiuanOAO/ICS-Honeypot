@@ -2402,6 +2402,33 @@ input:checked + .slider::before {
 
 .ip-analysis-search { min-width: 180px; }
 
+.ip-analysis-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.38rem 0.6rem;
+    font-size: 0.85rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ip-analysis-checkbox input {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.ip-analysis-checkbox:focus-within {
+    border-color: var(--accent);
+}
+
 /* ── Custom time-range pill ───────────────────────────── */
 
 .ip-analysis-custom {
@@ -2519,7 +2546,8 @@ input:checked + .slider::before {
     .ip-analysis-panel { padding: 1rem; }
     .ip-analysis-actions { width: 100%; }
     .ip-analysis-select,
-    .ip-analysis-search { flex: 1 1 150px; }
+    .ip-analysis-search,
+    .ip-analysis-checkbox { flex: 1 1 150px; }
     .ip-analysis-pagination { justify-content: space-between; }
     .ip-analysis-page-status { order: -1; width: 100%; }
 }
@@ -2944,6 +2972,7 @@ input:checked + .slider::before {
     border: 1px solid transparent;
 }
 .proto-http   { color: #3b82f6; background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.3); }
+.proto-https  { color: #10b981; background: rgba(16,185,129,.12); border-color: rgba(16,185,129,.3); }
 .proto-mqtt   { color: #a855f7; background: rgba(168,85,247,.12); border-color: rgba(168,85,247,.3); }
 .proto-modbus { color: #0ea5e9; background: rgba(14,165,233,.12); border-color: rgba(14,165,233,.3); }
 .proto-ssh    { color: #ef4444; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.3); }
@@ -3348,6 +3377,43 @@ input:checked + .slider::before {
     padding: 0.3rem 0.5rem;
     color: var(--text-secondary);
     flex: 1;
+}
+
+.packet-data-decoded {
+    flex: 1;
+    min-width: 0;
+}
+
+.packet-data-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    background: var(--bg-dark);
+    border-radius: var(--radius-sm);
+    padding: 0.45rem 0.55rem;
+    color: var(--text-primary);
+    max-height: 260px;
+    overflow: auto;
+}
+
+.packet-raw-toggle {
+    margin-top: 0.35rem;
+}
+
+.packet-raw-toggle > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    line-height: 1.4;
+}
+
+.packet-data-raw {
+    display: block;
+    margin-top: 0.3rem;
 }
 
 .packet-meta-toggle > summary {

@@ -85,6 +85,23 @@ Filebeat -> Elasticsearch -> Kibana -> ElastAlert
 - Integrates Filebeat, Elasticsearch, Kibana, and ElastAlert for analysis and alerting.
 - Provides a web dashboard for Agent management, honeypot deployment, and attack data review.
 
+## API Access
+
+Most core data and management functions are exposed through FastAPI. Web management APIs require an authenticated session, while Agent synchronization and upload APIs require the same `API_KEY` configured on the Server.
+
+| Category | API Capabilities |
+| --- | --- |
+| Agent management | List Agents, create Agents, enable/disable, reset, and delete Agents. |
+| Agent synchronization | Agent heartbeat, node configuration retrieval, and deployment configuration updates. |
+| Attack data | Upload attack logs, query recent logs, dashboard statistics, attacker-IP analysis, and per-IP details. |
+| Alerts | Query alerts and ingest alerts from ElastAlert or external systems. |
+| Whitelist | Query and update whitelist entries, and inspect whitelist hit logs. |
+| Deployment packages | Import ZIP / JSON packages, query the package library, and delete packages. |
+| Service templates | List service templates and instantiate a template into an Agent config page. |
+| Helper data | Server information and GeoIP lookup. |
+
+Static pages, logos, CSS, JavaScript, and README images are frontend or documentation assets rather than data APIs. Third-party integrations can call the available `/api/...` endpoints directly.
+
 ## Installation
 
 ### Requirements
@@ -111,7 +128,13 @@ pip install -r requirements.txt
 
 ### 3. Configure Server Environment Variables
 
-Create `server/.env`:
+Copy the example file to create `server/.env`:
+
+```bash
+cp server/.env.example server/.env
+```
+
+Then edit `server/.env`:
 
 ```env
 ADMIN_USERNAME=admin
@@ -130,7 +153,13 @@ DATABASE_URL=postgresql://honeypot:honeypot_change_me@127.0.0.1:5432/honeypot
 
 ### 4. Configure Client Agent Environment Variables
 
-Create `client/.env`:
+Copy the example file to create `client/.env`:
+
+```bash
+cp client/.env.example client/.env
+```
+
+Then make sure `client/.env` uses the same `API_KEY` as the Server:
 
 ```env
 API_KEY=shared-agent-key
@@ -171,8 +200,23 @@ python3 main.py
 Open another terminal:
 
 ```bash
-source .venv/bin/activate
-python3 client/main.py
+cd client
+chmod +x start_agent.sh
+./start_agent.sh -d
+```
+
+`start_agent.sh` checks Docker, Python, uv, and Python dependencies, then starts the Agent with the repository-level `.venv`. If the Agent needs to bind ports below 1024, such as 443, or the current user does not have Docker permission, run:
+
+```bash
+sudo ./start_agent.sh -d
+```
+
+Common management commands:
+
+```bash
+./start_agent.sh status
+./start_agent.sh logs
+./start_agent.sh stop
 ```
 
 After startup, the Agent registers with the Server and waits for deployment configuration. You can add or modify honeypot services for the Agent from the dashboard.

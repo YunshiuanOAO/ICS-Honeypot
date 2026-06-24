@@ -319,6 +319,7 @@ class AttackMap {
         let color;
         switch (protocol) {
             case "http": color = { r: 59, g: 130, b: 246 }; break;   // Blue
+            case "https": color = { r: 16, g: 185, b: 129 }; break;  // Green
             case "mqtt": color = { r: 168, g: 85, b: 247 }; break;   // Purple
             case "ssh": color = { r: 239, g: 68, b: 68 }; break;     // Red
             case "modbus": color = { r: 14, g: 165, b: 233 }; break;  // Cyan
@@ -449,7 +450,7 @@ class AttackMap {
         const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
         const protocolColors = {
-            http: "#3b82f6", mqtt: "#a855f7", ssh: "#ef4444",
+            http: "#3b82f6", https: "#10b981", mqtt: "#a855f7", ssh: "#ef4444",
             modbus: "#0ea5e9", default: "#f59e0b"
         };
         const pColor = protocolColors[protocol] || protocolColors.default;

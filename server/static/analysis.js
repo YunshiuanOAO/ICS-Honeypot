@@ -24,6 +24,7 @@
 
     const PROTOCOL_CLASS = {
         http: "proto-http",
+        https: "proto-https",
         mqtt: "proto-mqtt",
         modbus: "proto-modbus",
         ssh: "proto-ssh",
@@ -35,6 +36,67 @@
         const div = document.createElement("div");
         div.textContent = String(text);
         return div.innerHTML;
+    }
+
+    function normalizeHexString(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        let hex = raw;
+        if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.slice(2);
+        hex = hex.replace(/[\s:_-]+/g, "");
+        if (hex.length < 4 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) return "";
+        return hex;
+    }
+
+    function decodeHexToText(value) {
+        const hex = normalizeHexString(value);
+        if (!hex) return null;
+        const bytes = [];
+        for (let i = 0; i < hex.length; i += 2) {
+            bytes.push(parseInt(hex.slice(i, i + 2), 16));
+        }
+        try {
+            return new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(bytes));
+        } catch (_e) {
+            return String.fromCharCode(...bytes);
+        }
+    }
+
+    function isReadableDecodedText(text) {
+        if (!text) return false;
+        let printable = 0;
+        let control = 0;
+        for (const ch of text) {
+            const code = ch.charCodeAt(0);
+            if (code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)) printable++;
+            else control++;
+        }
+        return printable > 0 && control / Math.max(printable + control, 1) < 0.2;
+    }
+
+    function formatPacketData(value, protocol = "") {
+        const raw = String(value || "");
+        if (!raw) return "—";
+        const decoded = decodeHexToText(raw);
+        const shouldDecode = decoded && isReadableDecodedText(decoded);
+        if (!shouldDecode) {
+            return `<code class="packet-data">${escapeHtml(raw)}</code>`;
+        }
+
+        const normalizedRaw = normalizeHexString(raw);
+        const normalizedDecoded = normalizeHexString(decoded);
+        if (normalizedDecoded && normalizedDecoded.toLowerCase() === normalizedRaw.toLowerCase()) {
+            return `<code class="packet-data">${escapeHtml(raw)}</code>`;
+        }
+
+        return `
+            <div class="packet-data-decoded">
+                <pre class="packet-data-text">${escapeHtml(decoded)}</pre>
+                <details class="packet-raw-toggle">
+                    <summary>Raw hex</summary>
+                    <code class="packet-data packet-data-raw">${escapeHtml(raw)}</code>
+                </details>
+            </div>`;
     }
 
     function formatTime(ts) {
@@ -96,10 +158,12 @@
         const windowSel = document.getElementById("ip-analysis-window");
         const value = windowSel ? windowSel.value : "";
         const search = (document.getElementById("ip-analysis-search")?.value || "").trim();
-        const hideAgentIps = document.getElementById("ip-analysis-agent-filter")?.value !== "show";
+        const hideAgentIps = document.getElementById("ip-analysis-agent-filter")?.checked !== false;
+        const hidePrivateIps = document.getElementById("ip-analysis-private-filter")?.checked !== false;
         const params = [`page=${currentPage}`, `page_size=${pageSize}`];
         if (search) params.push(`search=${encodeURIComponent(search)}`);
         if (hideAgentIps) params.push("hide_agent_ips=true");
+        if (hidePrivateIps) params.push("hide_private_ips=true");
 
         if (value === "custom") {
             const fromIso = localDatetimeToIso(document.getElementById("ip-analysis-from")?.value || "");
@@ -669,8 +733,8 @@
                     <div class="packet-body">
                         ${renderPacketAlertDetails(matchedAlerts)}
                         <div class="packet-kv"><span>Node</span><code>${escapeHtml(l.node_id || "—")}</code></div>
-                        <div class="packet-kv"><span>Request</span><code class="packet-data">${escapeHtml(req || "—")}</code></div>
-                        <div class="packet-kv"><span>Response</span><code class="packet-data">${escapeHtml(resp || "—")}</code></div>
+                        <div class="packet-kv"><span>Request</span>${formatPacketData(req, l.protocol)}</div>
+                        <div class="packet-kv"><span>Response</span>${formatPacketData(resp, l.protocol)}</div>
                         <details class="packet-meta-toggle">
                             <summary>Metadata</summary>
                             <pre>${escapeHtml(JSON.stringify(meta, null, 2))}</pre>
@@ -734,6 +798,13 @@
         const agentFilter = document.getElementById("ip-analysis-agent-filter");
         if (agentFilter) {
             agentFilter.addEventListener("change", () => {
+                currentPage = 1;
+                refreshIpAnalysis();
+            });
+        }
+        const privateFilter = document.getElementById("ip-analysis-private-filter");
+        if (privateFilter) {
+            privateFilter.addEventListener("change", () => {
                 currentPage = 1;
                 refreshIpAnalysis();
             });

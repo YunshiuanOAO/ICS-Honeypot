@@ -539,7 +539,7 @@ class ServerDB:
 
     # ---------- IP analysis (used by attack-map analysis panel) ----------
 
-    async def get_ip_summary(self, limit=200, since=None, until=None, offset=0, ip_search=None, exclude_ips=None):
+    async def get_ip_summary(self, limit=200, since=None, until=None, offset=0, ip_search=None, exclude_ips=None, hide_private_ips=False):
         """Return per-attacker-IP rollups joined with alert stats.
 
         Each row: ip, total_packets, protocols (csv), node_ids (csv),
@@ -550,6 +550,22 @@ class ServerDB:
         ``alert_count`` / ``max_severity`` columns match what the user is
         actually viewing.
         """
+        private_ip_patterns = (
+            ["10.%", "127.%", "169.254.%", "192.168.%", "0.%"]
+            + [f"172.{i}.%" for i in range(16, 32)]
+            + ["fc%", "fd%"]
+        )
+
+        def add_not_private_filter(clauses: list, target_params: list, column: str):
+            clauses.append(
+                "("
+                + " AND ".join(f"{column} NOT LIKE ?" for _ in private_ip_patterns)
+                + f" AND {column} != ?"
+                + ")"
+            )
+            target_params.extend(private_ip_patterns)
+            target_params.append("::1")
+
         where_clauses: list = []
         params: list = []
         if since:
@@ -567,6 +583,8 @@ class ServerDB:
                 "l.attacker_ip NOT IN (" + ",".join("?" for _ in exclude_ips) + ")"
             )
             params.extend(exclude_ips)
+        if hide_private_ips:
+            add_not_private_filter(where_clauses, params, "l.attacker_ip")
         where = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
         # Alert sub-queries need their own window predicates because they
@@ -587,6 +605,8 @@ class ServerDB:
                 "a.attacker_ip NOT IN (" + ",".join("?" for _ in exclude_ips) + ")"
             )
             alert_params.extend(exclude_ips)
+        if hide_private_ips:
+            add_not_private_filter(alert_where, alert_params, "a.attacker_ip")
         # The logs table can be multiple GB because metadata stores full
         # packet context. Keep this dashboard query bounded even when a time
         # window is selected; otherwise the default "Last 7 days" view can
