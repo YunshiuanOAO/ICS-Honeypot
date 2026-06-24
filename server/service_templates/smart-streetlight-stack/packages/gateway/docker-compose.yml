@@ -5,6 +5,8 @@ services:
     working_dir: /app
     command: ["sh", "-c", "pip install --no-cache-dir paho-mqtt && python -u gateway.py"]
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # 下行通道：gateway listen 等 server 主動 dial（model B：對等雙通道）
     ports:
       - "${GATEWAY_LISTEN_PORT:-15566}:15566"

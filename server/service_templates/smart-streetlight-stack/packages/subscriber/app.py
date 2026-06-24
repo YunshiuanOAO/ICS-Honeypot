@@ -30,6 +30,7 @@ if _SOCKETIO_ASYNC_MODE == "eventlet":
         _SOCKETIO_ASYNC_MODE = "threading"
 
 import json
+import random
 import re
 import socket
 import time
@@ -90,6 +91,36 @@ MONGO_DB = os.environ.get("MONGO_DB", "streetlight").strip()
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin")
+
+
+def _env_int(name, default, min_value=None, max_value=None):
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    if min_value is not None:
+        value = max(value, min_value)
+    if max_value is not None:
+        value = min(value, max_value)
+    return value
+
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# HMI honeypot brightness simulation. Default timezone is UTC+8 for the NCKU/Taiwan scenario.
+SIM_LIGHT_DAY_START_HOUR = _env_int("SIM_LIGHT_DAY_START_HOUR", 5, 0, 23)
+SIM_LIGHT_DAY_END_HOUR = _env_int("SIM_LIGHT_DAY_END_HOUR", 18, 0, 24)
+SIM_LIGHT_UTC_OFFSET_HOURS = _env_float("SIM_LIGHT_UTC_OFFSET_HOURS", 8.0)
+SIM_LIGHT_RANDOM_MIN = _env_int("SIM_LIGHT_RANDOM_MIN", 20, 0, 100)
+SIM_LIGHT_RANDOM_MAX = _env_int("SIM_LIGHT_RANDOM_MAX", 100, 0, 100)
+if SIM_LIGHT_RANDOM_MAX < SIM_LIGHT_RANDOM_MIN:
+    SIM_LIGHT_RANDOM_MIN, SIM_LIGHT_RANDOM_MAX = SIM_LIGHT_RANDOM_MAX, SIM_LIGHT_RANDOM_MIN
+SIM_LIGHT_RANDOM_BUCKET_SECONDS = _env_int("SIM_LIGHT_RANDOM_BUCKET_SECONDS", 300, 1, 86400)
 
 
 # ---------- MongoDB read-only helper ----------
@@ -207,10 +238,38 @@ def _device_mac(device):
     return None
 
 
-def _map_payload():
+def _simulation_local_time(now=None):
+    timestamp = time.time() if now is None else float(now)
+    return time.gmtime(timestamp + SIM_LIGHT_UTC_OFFSET_HOURS * 3600)
+
+
+def _is_daylight_off_window(now=None):
+    hour = _simulation_local_time(now).tm_hour
+    start = SIM_LIGHT_DAY_START_HOUR
+    end = SIM_LIGHT_DAY_END_HOUR
+    if start == end:
+        return True
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def _simulated_brightness(mac, marker_index, device_index, now=None):
+    if _is_daylight_off_window(now):
+        return 0
+    timestamp = time.time() if now is None else float(now)
+    bucket = int(timestamp // SIM_LIGHT_RANDOM_BUCKET_SECONDS)
+    seed = f"{mac or 'unknown'}:{marker_index}:{device_index}:{bucket}"
+    return random.Random(seed).randint(SIM_LIGHT_RANDOM_MIN, SIM_LIGHT_RANDOM_MAX)
+
+
+def _map_payload(now=None):
+    if now is None:
+        now = time.time()
     exported = _load_map_export()
     markers = []
     fallback_device_index = 0
+    brightness_mode = "daytime_off" if _is_daylight_off_window(now) else "night_random"
     for index, marker in enumerate(exported.get("markers") or []):
         lat = marker.get("lat")
         lon = marker.get("lon", marker.get("lng"))
@@ -226,12 +285,16 @@ def _map_payload():
             fallback_device_index += 1
             device_lat = device.get("lat", lat)
             device_lon = device.get("lon", device.get("lng", lon))
+            brightness = _simulated_brightness(mac, index, device_index, now)
             devices.append(
                 {
                     **device,
                     "mac": mac,
                     "lat": device_lat,
                     "lon": device_lon,
+                    "brightness": brightness,
+                    "brightness_simulated": True,
+                    "brightness_mode": brightness_mode,
                     "controllable": bool(mac and mac in COMMANDS),
                     "device_index": device_index,
                 }
@@ -251,6 +314,9 @@ def _map_payload():
     summary["export_device_count"] = summary.get("device_count")
     summary["marker_count"] = len(markers)
     summary["device_count"] = sum(len(m["devices"]) for m in markers)
+    summary["brightness_mode"] = brightness_mode
+    summary["brightness_day_start_hour"] = SIM_LIGHT_DAY_START_HOUR
+    summary["brightness_day_end_hour"] = SIM_LIGHT_DAY_END_HOUR
     return {
         "exported_at": exported.get("exported_at"),
         "summary": summary,

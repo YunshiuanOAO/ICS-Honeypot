@@ -5,6 +5,8 @@ services:
     working_dir: /app
     command: ["sh", "-c", "pip install --no-cache-dir pymongo && python -u socket_server.py"]
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # model B：server 主動 dial gateway 的下行 port（不再 listen 15566）
     # listen: 15567 (UP) / 15568 (BRIDGE，subscriber 連入)
     ports:

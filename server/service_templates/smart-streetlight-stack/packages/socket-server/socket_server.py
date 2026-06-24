@@ -119,25 +119,47 @@ class MongoStore:
         self.client = None
         self.db = None
         self._lock = threading.Lock()
+        self._last_attempt = 0.0
+        self._retry_interval = float(os.environ.get("MONGO_RETRY_INTERVAL", "5"))
         self._connect()
 
     def _connect(self):
         if not self.uri or MongoClient is None:
-            return
+            return False
+        now = time.monotonic()
+        if self.db is not None:
+            return True
+        if now - self._last_attempt < self._retry_interval:
+            return False
+        self._last_attempt = now
         try:
-            self.client = MongoClient(self.uri, serverSelectionTimeoutMS=3000)
-            self.client.admin.command("ping")
-            self.db = self.client[self.db_name]
-            self.db["command_logs"].create_index("ts")
-            self.db["command_logs"].create_index("mac")
-            self.db["runtime"].create_index("mac", unique=True)
+            with self._lock:
+                if self.db is not None:
+                    return True
+                client = MongoClient(self.uri, serverSelectionTimeoutMS=3000)
+                client.admin.command("ping")
+                db = client[self.db_name]
+                db["command_logs"].create_index("ts")
+                db["command_logs"].create_index("mac")
+                db["runtime"].create_index("mac", unique=True)
+                self.client = client
+                self.db = db
             print(f"[TCPManagement] [MongoDB] 已連線 {self.uri} db={self.db_name}")
-        except PyMongoError as e:
+            return True
+        except (PyMongoError, OSError) as e:
             print(f"[TCPManagement] [MongoDB] 連線失敗 {self.uri}: {e}")
+            if self.client is not None:
+                try:
+                    self.client.close()
+                except Exception:
+                    pass
             self.client = None
             self.db = None
+            return False
 
     def enabled(self):
+        if self.db is None:
+            self._connect()
         return self.db is not None
 
     def insert_command_log(self, doc):

@@ -5,6 +5,8 @@ services:
     working_dir: /app
     command: ["sh", "-c", "pip install --no-cache-dir -r requirements.txt && python -u app.py"]
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Subscriber 跑在跟 broker 不同的 EC2 上，透過 VPC 內網連 broker
     # 不再使用 host network，改用 bridge 並把 Web UI 的 5000 publish 出來
     ports:

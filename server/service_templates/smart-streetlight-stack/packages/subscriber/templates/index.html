@@ -910,7 +910,7 @@
     </div>
 
     <script>
-        const MAP_DATA = {{ map_payload|tojson }};
+        let MAP_DATA = {{ map_payload|tojson }};
         const COMMANDS = {{ commands|tojson }};
         const CONTROL_MACS = Object.keys(COMMANDS);
         const GATEWAYS = [
@@ -1135,9 +1135,10 @@
                 .includes(query);
         }
 
-        function renderMarkers() {
+        function renderMarkers(options = {}) {
             markerLayer.clearLayers();
             markers = [];
+            const shouldFitBounds = options.fitBounds !== false;
             const campus = document.getElementById('campusFilter').value;
             const query = document.getElementById('mapSearch').value.trim().toLowerCase();
             const bounds = [];
@@ -1164,7 +1165,7 @@
             }
             renderGateways(query, bounds);
 
-            if (bounds.length) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 18 });
+            if (bounds.length && shouldFitBounds) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 18 });
             updateDashboardStats();
             document.getElementById('mapSubtitle').textContent =
                 `${filteredCount} / ${(MAP_DATA.markers || []).length} 個控制器標點 · ${GATEWAYS.length} 個閘道器 · ${allDevices().length} 盞路燈 · 匯出 ${MAP_DATA.exported_at || '-'}`;
@@ -1194,6 +1195,7 @@
                 <strong>${escapeHtml(deviceSite(first))}</strong>
                 <div>標點 ${escapeHtml(marker.marker_key)}</div>
                 <div>路燈 ${escapeHtml(marker.device_count || devices.length)} 盞</div>
+                <div>亮度 ${escapeHtml(valueOrDash(first.brightness, '%'))}</div>
                 <div>座標 ${escapeHtml(marker.lat)}, ${escapeHtml(marker.lon)}</div>
             </div>`;
         }
@@ -1362,6 +1364,37 @@
             if (e.key === 'Enter') sendCustom();
         });
 
+        function refreshSelectedNodeAfterMapUpdate() {
+            if (!selectedDevice || selectedDevice.node_type === 'gateway') return;
+            const selectedMac = selectedDevice.mac || '';
+            const selectedDeviceIndex = selectedDevice.device_index;
+            const selectedMarkerKey = selectedMarker && selectedMarker.marker_key;
+            for (const marker of (MAP_DATA.markers || [])) {
+                if (selectedMarkerKey && marker.marker_key !== selectedMarkerKey) continue;
+                const devices = markerDevices(marker);
+                let device = selectedMac ? devices.find((d) => d.mac === selectedMac) : null;
+                if (!device && selectedDeviceIndex !== undefined) {
+                    device = devices.find((d) => d.device_index === selectedDeviceIndex);
+                }
+                if (device) {
+                    selectMarker(marker, device, null);
+                    return;
+                }
+            }
+        }
+
+        async function refreshMapData() {
+            try {
+                const r = await fetch('/api/streetlights', { cache: 'no-store' });
+                if (!r.ok) return;
+                MAP_DATA = await r.json();
+                renderMarkers({ fitBounds: false });
+                refreshSelectedNodeAfterMapUpdate();
+            } catch (e) {
+                console.warn('streetlight map refresh failed', e);
+            }
+        }
+
         async function refreshRuntime() {
             const meta = document.getElementById('runtimeMeta');
             const body = document.getElementById('runtimeBody');
@@ -1434,6 +1467,7 @@
         clearLog();
         refreshRuntime();
         refreshLogs();
+        setInterval(refreshMapData, 60000);
         setInterval(refreshRuntime, 5000);
         setInterval(refreshLogs, 5000);
     </script>
